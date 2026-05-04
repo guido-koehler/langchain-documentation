@@ -625,6 +625,16 @@ These tools can already:
 - Open PRs with generated changes
 - Explain architectural decisions and suggest refactors
 
+#### Observed Limitations in the TJ-Sales Context
+
+Working with these tools on `tj-sales` reveals gaps that become significant at scale:
+
+- **No Jira awareness** — IDE agents cannot read the current sprint, pick up a ticket moving to "In Progress", or post a comment back to Jira when a PR is opened. Every interaction requires a developer to manually copy context from Jira into the prompt.
+- **No GitHub Actions awareness** — Copilot and Cursor cannot autonomously watch a failing CI run, fetch the logs, diagnose the failure, and open a fix PR. A developer must notice the failure, copy the log output, and manually prompt the agent.
+- **Convention drift under repeated use** — In practice, IDE agents do not reliably apply the Result pattern, IBranchOfficeAccessService access checks, or the correct CQRS namespace (`Gedat.TimeJobOnline.Sales` vs `People`) without being reminded in every session. There is no persistent, machine-enforced convention layer.
+- **No audit trail** — There is no record of which code was AI-generated, which prompt produced it, or what the agent's reasoning was. This makes debugging regressions after AI-assisted changes difficult.
+- **Session-scoped, not pipeline-scoped** — IDE agents exist for the duration of a developer session. They cannot run nightly, respond to webhooks at 3am, or trigger on a merge to `main`.
+
 ### Comparison Matrix
 
 | Criterion | Agentic IDEs | Custom Orchestration (LangGraph) |
@@ -663,6 +673,27 @@ These tools can already:
 - You need **full observability and auditability** — every LLM call, tool invocation, and state transition must be traceable and reproducible
 - You want to **encode conventions programmatically** — ensuring every agent-generated file strictly follows CQRS, the Result pattern, and FluentValidation rules, verified automatically
 - The operation is **high-stakes** — auto-committing code, creating Jira tickets, triggering deployments — where deterministic, testable behaviour is non-negotiable
+
+#### Quick-Reference Decision Flowchart
+
+```
+Is a developer present and actively steering the task?
+├── YES → Use an Agentic IDE (GitHub Copilot, Cursor)
+│          Fast, interactive, zero infrastructure.
+└── NO  → Is the task recurring and automatable?
+           ├── NO  → Write a simple script or defer
+           └── YES → Does it require Jira/GitHub Actions integration
+                     or multi-step iterative logic?
+                     ├── NO  → Scheduled script is sufficient
+                     └── YES → Build a Custom LangGraph Agent
+                                 (webhook-triggered, fully observable,
+                                  Jira + GitHub Actions aware)
+```
+
+**Escalation path:** When a LangGraph agent exhausts its fix attempts or encounters an unexpected state, it should **not silently fail**. The correct behaviour is:
+1. Open a **draft PR** with a `needs-human` label containing everything the agent has produced so far
+2. Post a **Jira comment** on the originating ticket: `"Agent reached max attempts on [step]. Draft PR: [link]. Manual intervention required."`
+3. A developer picks up the draft PR in their IDE (Copilot/Cursor) to complete the work — the two approaches are **complementary, not competing**.
 
 ### Recommendation for TJ-Sales
 

@@ -1339,6 +1339,103 @@ async def scaffold_and_verify(plan: ScaffoldPlan, max_fix_attempts: int = 2) -> 
     return {"status": "build_failed", "files": written_files, "build": build_result}
 ```
 
+### Step 3 — Express the fix loop as a LangGraph cycle
+
+The `scaffold_and_verify` function above uses a plain Python `for`-loop internally. The following shows the same pattern expressed as a **proper LangGraph cyclic graph** — making the retry behaviour explicit, inspectable in LangSmith, and independently resumable after a checkpoint.
+
+**`agents/graphs/build_fix_loop_graph.py`**
+
+```python
+from typing import TypedDict
+from langgraph.graph import StateGraph, END
+from agents.agents.backend_scaffold import scaffold_backend_feature, ScaffoldPlan
+from agents.tools.dotnet_tools import dotnet_build
+from agents.config.llm import get_llm
+from langchain_core.messages import SystemMessage, HumanMessage
+import json, re
+
+MAX_FIX_ATTEMPTS = 3
+
+
+class BuildState(TypedDict):
+    plan: ScaffoldPlan
+    written_files: list[str]
+    build_output: dict | None
+    attempt: int
+    status: str          # "pending" | "success" | "build_failed" | "max_attempts"
+
+
+# ── Nodes ─────────────────────────────────────────────────────────────────────
+
+async def scaffold_node(state: BuildState) -> BuildState:
+    files = await scaffold_backend_feature(state["plan"])
+    return {**state, "written_files": files, "attempt": 0}
+
+
+async def build_check_node(state: BuildState) -> BuildState:
+    result = await dotnet_build.ainvoke({})
+    return {**state, "build_output": result}
+
+
+async def fix_node(state: BuildState) -> BuildState:
+    llm = get_llm()
+    build = state["build_output"]
+    fix_response = await llm.ainvoke([
+        SystemMessage(content=(
+            "Fix the following .NET compile errors. "
+            "Return only corrected files as a JSON array: [{\"path\": \"...\", \"content\": \"...\"}]"
+        )),
+        HumanMessage(content=f"Errors:\n{build['stderr']}\n\nStdout:\n{build['stdout']}"),
+    ])
+    from agents.config.settings import settings
+    raw = re.sub(r"^```(?:json)?\n?|```$", "", fix_response.content.strip(), flags=re.MULTILINE)
+    try:
+        for f in json.loads(raw):
+            full_path = settings.repo_root / "backend-v2" / f["path"]
+            if full_path.exists():
+                full_path.write_text(f["content"], encoding="utf-8")
+    except Exception:
+        pass
+    return {**state, "attempt": state["attempt"] + 1}
+
+
+# ── Routing ───────────────────────────────────────────────────────────────────
+
+def route_after_build(state: BuildState) -> str:
+    if state["build_output"]["exit_code"] == 0:
+        return "success"
+    if state["attempt"] >= MAX_FIX_ATTEMPTS:
+        return "max_attempts"
+    return "fix"
+
+
+# ── Graph assembly ─────────────────────────────────────────────────────────────
+
+def build_build_fix_loop_graph():
+    g = StateGraph(BuildState)
+
+    g.add_node("scaffold", scaffold_node)
+    g.add_node("build_check", build_check_node)
+    g.add_node("fix", fix_node)
+
+    g.set_entry_point("scaffold")
+    g.add_edge("scaffold", "build_check")
+
+    # Conditional edge: loops back to fix_node on failure, exits on success or exhaustion
+    g.add_conditional_edges("build_check", route_after_build, {
+        "success":      END,
+        "fix":          "fix",          # ← cyclic edge: creates the loop
+        "max_attempts": END,
+    })
+
+    # After fixing, re-run the build — this is the cycle
+    g.add_edge("fix", "build_check")
+
+    return g.compile()
+```
+
+This graph is **cyclic**: `build_check → fix → build_check → ...` repeats until the build passes or `MAX_FIX_ATTEMPTS` is reached. Each cycle is a separate node execution, fully traced in LangSmith with its own state snapshot — you can inspect exactly which compile error triggered each fix attempt.
+
 ---
 
 ## 11. Phase 5 — Full Feature Workflow
@@ -1656,16 +1753,117 @@ def build_feature_graph():
         "scaffold": "backend",
     })
 
-    # Backend and frontend can run in parallel using Send API
-    # For simplicity here they are sequential; switch to parallel with langgraph.Send
+    # Sequential scaffold (simple default); see parallel variant below
     g.add_edge("backend", "frontend")
     g.add_edge("frontend", "tests")
 
-    # Human-in-the-loop: pause before opening PR
-    g.add_edge("tests", "open_pr")   # replace with interrupt_before for HITL
+    # Human-in-the-loop: graph pauses at open_pr until a developer approves
+    g.add_edge("tests", "open_pr")
 
     g.add_edge("open_pr", END)
-    return g.compile()
+    return g.compile(
+        checkpointer=AsyncSqliteSaver.from_conn_string("checkpoints.db"),
+        interrupt_before=["open_pr"],   # ← pause here for human review
+    )
+```
+
+#### Parallel scaffold with `Send`
+
+To run backend and frontend scaffolding in parallel (recommended for Phase 5), replace the sequential edges with a `Send`-based dispatch:
+
+```python
+from langgraph.constants import Send
+from typing import Annotated
+import operator
+
+
+class FeatureStateParallel(TypedDict):
+    jira_key: str
+    plan: FeaturePlan | None
+    # Reducer: parallel nodes append their results to this list
+    scaffold_results: Annotated[list[dict], operator.add]
+    test_result: dict | None
+    pr_number: int | None
+    error: str | None
+
+
+def dispatch_scaffold(state: FeatureStateParallel) -> list[Send]:
+    """Fan out to backend and (optionally) frontend in parallel."""
+    targets = [Send("backend", state)]
+    if state["plan"] and state["plan"].needs_frontend:
+        targets.append(Send("frontend", state))
+    return targets
+
+
+def build_parallel_feature_graph():
+    g = StateGraph(FeatureStateParallel)
+
+    g.add_node("plan", plan_node)
+    g.add_node("dispatch_scaffold", dispatch_scaffold)   # fan-out
+    g.add_node("backend", backend_node)
+    g.add_node("frontend", frontend_node)
+    g.add_node("tests", test_node)
+    g.add_node("open_pr", open_pr_node)
+
+    g.set_entry_point("plan")
+    g.add_conditional_edges("plan", route_after_plan, {
+        "error_end": END,
+        "scaffold": "dispatch_scaffold",
+    })
+
+    # Both backend and frontend run in parallel; LangGraph joins them automatically
+    # before proceeding to tests (both must complete to advance)
+    g.add_edge("backend", "tests")
+    g.add_edge("frontend", "tests")
+    g.add_edge("tests", "open_pr")
+    g.add_edge("open_pr", END)
+
+    return g.compile(
+        checkpointer=AsyncSqliteSaver.from_conn_string("checkpoints.db"),
+        interrupt_before=["open_pr"],
+    )
+```
+
+#### Human-in-the-loop: approving and resuming
+
+When `interrupt_before=["open_pr"]` is set, the graph **pauses** after tests complete and waits for explicit approval. Resume flow:
+
+```python
+import asyncio
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from agents.graphs.feature_workflow import build_feature_graph
+
+async def approve_and_resume(thread_id: str):
+    """
+    Called by a developer (via CLI, Slack bot, or GitHub comment) to approve
+    the scaffold and open the PR.
+    """
+    graph = build_feature_graph()
+
+    # Inspect what the agent has done so far
+    state = await graph.aget_state(config={"configurable": {"thread_id": thread_id}})
+    plan = state.values.get("plan")
+    print(f"Approving scaffold for {plan.jira_key}: {plan.feature_name}")
+    print(f"Files written: {state.values.get('backend_result', {}).get('files', [])}")
+
+    # Resume — passing None as input continues from the checkpoint
+    result = await graph.ainvoke(
+        None,
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    print(f"PR opened: #{result['pr_number']}")
+
+
+# Trigger initial run (will pause before open_pr)
+async def trigger_feature(jira_key: str):
+    graph = build_feature_graph()
+    thread_id = f"feature-{jira_key}"
+    await graph.ainvoke(
+        {"jira_key": jira_key, "plan": None, "backend_result": None,
+         "frontend_result": None, "test_result": None, "pr_number": None, "error": None},
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    print(f"Graph paused. Approve with: python -c \"asyncio.run(approve_and_resume('{thread_id}'))\"")
 ```
 
 ---
@@ -1987,13 +2185,34 @@ async def main():
     print(f"Evaluation complete. View results at: {results.experiment_url}")
 
 
+async def compare(new_prompt_version: str = "scaffold-v2"):
+    """
+    Run a second experiment with a modified prompt and compare in LangSmith.
+    Swap out the target function below to test a different prompt or model.
+    """
+    async def target_v2(inputs: dict) -> dict:
+        # Example: test with the mini model or a revised system prompt
+        # Adjust backend_scaffold._SYSTEM and re-import before calling this
+        return await target(inputs)
+
+    results_v2 = await aevaluate(
+        target_v2,
+        data="scaffold-benchmark",
+        evaluators=[uses_result_pattern, has_fluent_validation, build_succeeds, correct_namespace],
+        experiment_prefix=new_prompt_version,
+        max_concurrency=2,
+    )
+    print(f"Comparison experiment: {results_v2.experiment_url}")
+    print("Open LangSmith → scaffold-benchmark dataset → Compare Experiments to view side-by-side scores.")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
 Run: `python -m agents.evals.run_eval`
 
-Results appear in the LangSmith UI under the `scaffold-benchmark` dataset. Re-run after every prompt change to guard against regressions.
+Results appear in the LangSmith UI under the `scaffold-benchmark` dataset. Re-run after every prompt change to guard against regressions. To compare two prompt versions side-by-side, run both `main()` and `compare()` — LangSmith's **Compare Experiments** view shows per-evaluator score deltas between `scaffold-v1` and `scaffold-v2` across every example in the dataset.
 
 #### Step 4 — Add `evals/` to the project structure
 
@@ -2145,6 +2364,135 @@ docker run -d \
 ```
 
 ### Important: The agent container needs access to the repository file system to read and write files. Mount the repo as a volume or run the agent on the same machine as the development environment.
+
+### AKS Deployment (Helm)
+
+The agent service can be deployed as a Helm-managed pod in the **existing AKS cluster** alongside the backend:
+
+```yaml
+# deployments/helm-charts/agents/values.yaml
+replicaCount: 1
+
+image:
+  repository: <your-acr>.azurecr.io/tj-sales-agents
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 8080
+
+env:
+  AZURE_OPENAI_ENDPOINT: ""        # injected from Azure Key Vault via CSI driver
+  AZURE_OPENAI_API_KEY: ""
+  AZURE_OPENAI_DEPLOYMENT: "gpt-4o"
+  GITHUB_TOKEN: ""
+  GITHUB_REPO: "Gedat-GmbH/tj-sales"
+  JIRA_BASE_URL: ""
+  JIRA_USER_EMAIL: ""
+  JIRA_API_TOKEN: ""
+  JIRA_PROJECT_KEY: "TJS"
+  REPO_ROOT: "/repo"
+  LANGCHAIN_TRACING_V2: "true"
+  LANGCHAIN_PROJECT: "tj-sales-agents"
+
+volumeMounts:
+  - name: repo
+    mountPath: /repo
+
+volumes:
+  - name: repo
+    persistentVolumeClaim:
+      claimName: tj-sales-repo-pvc   # or use a git-sync init container
+```
+
+Deploy:
+
+```bash
+helm upgrade --install tj-sales-agents deployments/helm-charts/agents \
+  --namespace tj-sales \
+  --set image.tag=$(git rev-parse --short HEAD)
+```
+
+**Repository access in AKS:** The agent needs to read/write the codebase. Two options:
+1. **Git-sync init container** — clones the repo on pod start; suitable for read-heavy agents (CI monitor, release notes)
+2. **Ephemeral job per run** — spawn a Kubernetes `Job` per Jira webhook, clone repo, run agent, push branch, clean up — better isolation for code-writing agents
+
+### GitHub Actions Integration
+
+#### Manual trigger via `workflow_dispatch`
+
+Add `.github/workflows/run-agent.yml` to trigger any agent manually from the GitHub Actions UI:
+
+```yaml
+name: Run Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Task to run (e.g. 'TJS-123' for feature scaffold, 'ci-monitor' for CI check)"
+        required: true
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r agents/requirements.txt
+      - run: python -m agents.main --task "${{ github.event.inputs.task }}"
+        env:
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: TJS
+          REPO_ROOT: ${{ github.workspace }}
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+```
+
+#### Automated eval on agent code changes
+
+Add `.github/workflows/agent-eval.yml` to run the LangSmith benchmark automatically on every PR that modifies `agents/`:
+
+```yaml
+name: Agent Evaluation
+
+on:
+  pull_request:
+    paths:
+      - "agents/**"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r agents/requirements.txt
+      - name: Run LangSmith benchmark
+        run: python -m agents.evals.run_eval
+        env:
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: TJS
+          REPO_ROOT: ${{ github.workspace }}
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGCHAIN_PROJECT: tj-sales-agents-ci
+```
+
+This ensures every prompt or tool change is regression-tested against the `scaffold-benchmark` dataset before merging.
 
 ### Environment Variables Summary
 
