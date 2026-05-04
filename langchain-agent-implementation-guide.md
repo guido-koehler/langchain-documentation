@@ -731,7 +731,7 @@ These Markdown files are loaded at agent startup and injected into system prompt
 
 ### `agents/conventions/backend-patterns.md`
 
-```markdown
+````markdown
 # TJ-Sales Backend Conventions
 
 ## Module Structure
@@ -769,7 +769,7 @@ Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual reg
 - Sales modules: `Gedat.TimeJobOnline.Sales.{Module}`
 - People modules: `Gedat.TimeJobOnline.People.{Module}`
 - Disposition modules: `Gedat.TimeJobOnline.Disposition.{Module}`
-```
+````
 
 ### `agents/conventions/frontend-patterns.md`
 
