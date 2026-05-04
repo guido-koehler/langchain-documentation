@@ -1,0 +1,66 @@
+# LangChain Documentation — AI Coding Agent Instructions
+
+## Repository Purpose
+
+This repository contains the **documentation for the agentic development setup** used in the [tj-sales](C:\Users\Guido.Koehler\source\repos\tj-sales) project. It covers architecture decisions, requirements specifications, and implementation guides for the LangChain/LangGraph-based multi-agent system that automates development workflows for tj-sales.
+
+### Documents in this Repository
+
+| File | Description |
+|------|-------------|
+| `langchain-agent-implementation-guide.md` | Step-by-step implementation guide for all agents (code review, translation, CI/CD monitor, scaffold, feature workflow, release notes) |
+| `langchain-multi-agent-evaluation.md` | Feasibility evaluation and strategic comparison of the multi-agent approach |
+| `langgraph-langsmith-requirements.md` | Functional and non-functional requirements for the agentic setup, including Jira and GitHub integrations |
+
+## Related Repository
+
+The **tj-sales** application being served by these agents lives at:
+
+```
+C:\Users\Guido.Koehler\source\repos\tj-sales
+```
+
+Its own Copilot instructions (architecture, patterns, conventions) are at:
+
+```
+C:\Users\Guido.Koehler\source\repos\tj-sales\.github\copilot-instructions.md
+```
+
+Always consult the tj-sales `copilot-instructions.md` for details on the target codebase architecture (backend .NET patterns, Angular frontend conventions, module structure, etc.) when writing or reviewing agent implementations that interact with tj-sales code.
+
+## Development Workflow
+
+### Work Organisation — Jira
+
+- All features, bugs, and tasks are tracked as **Jira tickets** inside **Sprints**.
+- When implementing or documenting a new agent or workflow, reference the corresponding Jira ticket number in commit messages and PR descriptions (e.g. `TJS-123`).
+
+### Source Control — GitHub
+
+- Code lives in **GitHub repositories**.
+- Changes are introduced via **Pull Requests** from feature branches into `main`.
+- Branch naming convention follows the Jira ticket: `feature/TJS-123-short-description`.
+- PRs require passing CI checks before merge.
+
+### CI/CD — GitHub Actions
+
+- **Automated tests** and **code coverage checks** run on every PR via GitHub Actions.
+- Agent implementations in the ai/ layer of tj-sales must maintain or improve test coverage.
+- Do not merge code that causes CI to fail.
+
+## Agent System Overview
+
+The agentic setup orchestrates the following agents for the tj-sales project:
+
+| Agent | Responsibility |
+|-------|---------------|
+| Code Review Agent | Reviews PRs for convention compliance and architecture patterns |
+| Translation Agent | Manages i18n translation files across the Angular frontend |
+| CI/CD Monitor Agent | Monitors GitHub Actions runs and surfaces failures |
+| Backend Scaffold Agent | Generates new .NET modules following tj-sales conventions |
+| Frontend Scaffold Agent | Generates Angular micro-frontend components and modules |
+| Test Writer Agent | Writes unit and integration tests for new code |
+| Feature Planner Agent | Decomposes Jira tickets into implementation tasks |
+| Release Notes Agent | Generates release notes from merged PRs and commits |
+
+All agents are orchestrated using **LangGraph** and observed via **LangSmith**.
