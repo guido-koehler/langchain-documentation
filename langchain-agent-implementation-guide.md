@@ -137,11 +137,11 @@ touch agents/tools/__init__.py agents/agents/__init__.py agents/graphs/__init__.
 
 ```text
 # LangChain + LangGraph
-langchain>=0.3.0
-langchain-core>=0.3.0
-langgraph>=0.2.0
-langchain-community>=0.3.0
-langchain-azure-openai>=0.2.0   # Azure OpenAI integration
+langchain>=1.0.0
+langchain-core>=1.0.0
+langgraph>=1.0.0
+langgraph-checkpoint-sqlite>=2.0.0    # required for AsyncSqliteSaver
+langchain-openai>=0.3.0               # Azure OpenAI integration
 
 # HTTP & API clients
 httpx>=0.27.0                   # async HTTP (Jira, GitHub REST)
@@ -157,7 +157,7 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 
 # Observability
-langsmith>=0.1.0
+langsmith>=0.3.0
 
 # Utilities
 tenacity>=9.0.0
@@ -195,8 +195,8 @@ JIRA_PROJECT_KEY=TJS
 REPO_ROOT=/path/to/tj-sales
 
 # LangSmith (optional)
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=ls__...
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls__...
 LANGCHAIN_PROJECT=tj-sales-agents
 
 # Webhook server
@@ -283,6 +283,7 @@ The checkpointer persists agent state so that workflows can be paused (human-in-
 **`agents/config/checkpointer.py`**
 
 ```python
+from contextlib import asynccontextmanager
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pathlib import Path
 from agents.config.settings import settings
@@ -292,8 +293,11 @@ _DB_PATH = settings.repo_root / ".agents" / "checkpoints.db"
 _DB_PATH.parent.mkdir(exist_ok=True)
 
 
-def get_checkpointer() -> AsyncSqliteSaver:
-    return AsyncSqliteSaver.from_conn_string(str(_DB_PATH))
+@asynccontextmanager
+async def get_checkpointer():
+    """Yields an async SQLite checkpointer for LangGraph state persistence."""
+    async with AsyncSqliteSaver.from_conn_string(str(_DB_PATH)) as checkpointer:
+        yield checkpointer
 ```
 
 > **Note:** For multi-machine or containerised deployments, swap `AsyncSqliteSaver` for `AsyncRedisSaver` from `langgraph-checkpoint-redis`.
@@ -544,6 +548,17 @@ async def get_pr_diff(pr_number: int) -> str:
 
 
 @tool
+async def get_pr_details(pr_number: int) -> dict:
+    """Fetch metadata (head branch, title, author) for a pull request."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{_BASE}/repos/{_REPO}/pulls/{pr_number}", headers=_HEADERS
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+@tool
 async def post_pr_review_comment(pr_number: int, body: str, commit_id: str, path: str, line: int) -> dict:
     """Post an inline review comment on a specific line of a PR diff."""
     async with httpx.AsyncClient() as client:
@@ -769,6 +784,20 @@ Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual reg
 - Sales modules: `Gedat.TimeJobOnline.Sales.{Module}`
 - People modules: `Gedat.TimeJobOnline.People.{Module}`
 - Disposition modules: `Gedat.TimeJobOnline.Disposition.{Module}`
+
+## Multi-tenancy Access Control
+
+- All endpoints that access tenant-scoped data MUST inject and call `IBranchOfficeAccessService` to validate that the requesting user belongs to the correct branch office.
+- Example: `await _branchOfficeAccessService.ValidateAsync(tenantId, userId, ct);`
+- This is defined in `Common.Application` and registered via Scrutor.
+
+## Integration Events (Cross-Module Communication)
+
+- Modules communicate asynchronously via integration events using MassTransit on Azure Service Bus.
+- Each module that publishes events defines them in its `[Module].IntegrationEvents` project.
+- Event classes follow the naming convention: `[Entity][Action]IntegrationEvent` (e.g., `TalentCreatedIntegrationEvent`).
+- Handlers implement `IConsumer<TEvent>` and are registered via the MassTransit `IServiceInstaller`.
+- Never use direct method calls across module boundaries — use integration events.
 ````
 
 ### `agents/conventions/frontend-patterns.md`
@@ -824,6 +853,15 @@ Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual reg
 - Framework: Vitest
 - Use `TestBed` with `provideHttpClientTesting`
 - File naming: `{component}.spec.ts` alongside the component
+
+## AutoFixture Wrapper
+
+`Fake.Create<T>()` is a **project-specific extension wrapper** over AutoFixture. It is defined in `Common.Tests` and provides convention-based fixture creation. Do NOT use `fixture.Create<T>()` directly — always use `Fake.Create<T>()`.
+
+## Assertion Library by Module
+
+- **All modules except Competency**: use `AwesomeAssertions` (e.g., `result.Should().BeSuccess()`)
+- **Competency module only**: uses `FluentAssertions` — generate assertions using its API instead.
 ```
 
 ---
@@ -993,9 +1031,20 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from agents.config.llm import get_llm
 from agents.config.settings import settings
 
-_I18N_DIR = settings.repo_root / "frontend" / "shared" / "src" / "lib" / "assets" / "i18n"
 _SOURCE_LANG = "de"   # Primary locale; adjust if your source is different
 _TARGET_LANGS = ["de"]  # Add other locales as needed
+
+
+def _get_i18n_dirs(repo_root: Path) -> list[Path]:
+    """Return all i18n asset directories: shared library + each app."""
+    dirs = [repo_root / "frontend" / "shared" / "src" / "lib" / "assets" / "i18n"]
+    apps_root = repo_root / "frontend" / "apps"
+    if apps_root.exists():
+        for app_dir in sorted(apps_root.iterdir()):
+            candidate = app_dir / "src" / "assets" / "i18n"
+            if candidate.is_dir():
+                dirs.append(candidate)
+    return dirs
 
 
 def _load_json(path: Path) -> dict:
@@ -1019,52 +1068,56 @@ def _find_missing_keys(source: dict, target: dict, prefix: str = "") -> list[str
 
 async def translate_missing_keys(source_lang: str = "en") -> dict[str, list[str]]:
     """
-    Compare i18n JSON files, detect missing keys, generate translations via LLM,
-    and write updated files. Returns a dict of {lang: [translated_keys]}.
+    Compare i18n JSON files across all app and shared directories, detect missing keys,
+    generate translations via LLM, and write updated files.
+    Returns a dict of {lang: [translated_keys]}.
     """
     llm = get_llm(mini=True)
-    source_path = _I18N_DIR / f"{source_lang}.json"
-    if not source_path.exists():
-        return {}
-
-    source = _load_json(source_path)
     translated: dict[str, list[str]] = {}
 
-    for lang in _TARGET_LANGS:
-        if lang == source_lang:
-            continue
-        target_path = _I18N_DIR / f"{lang}.json"
-        target = _load_json(target_path)
-        missing_keys = _find_missing_keys(source, target)
-
-        if not missing_keys:
-            translated[lang] = []
+    for i18n_dir in _get_i18n_dirs(settings.repo_root):
+        source_path = i18n_dir / f"{source_lang}.json"
+        if not source_path.exists():
             continue
 
-        # Build a flat dict of only the missing key-value pairs for the prompt
-        missing_values = {k: _get_nested(source, k.split(".")) for k in missing_keys}
+        source = _load_json(source_path)
 
-        response = await llm.ainvoke([
-            SystemMessage(content=(
-                f"You are a professional translator. Translate the following JSON values "
-                f"from {source_lang} to {lang}. "
-                "Preserve any {{interpolation}} placeholders exactly as-is. "
-                "Return ONLY valid JSON with the same keys and translated values."
-            )),
-            HumanMessage(content=json.dumps(missing_values, ensure_ascii=False)),
-        ])
+        for lang in _TARGET_LANGS:
+            if lang == source_lang:
+                continue
+            target_path = i18n_dir / f"{lang}.json"
+            target = _load_json(target_path)
+            missing_keys = _find_missing_keys(source, target)
 
-        try:
-            translations = json.loads(response.content)
-        except json.JSONDecodeError:
-            continue
+            if not missing_keys:
+                translated.setdefault(lang, [])
+                continue
 
-        # Merge translations back into target
-        for key, value in translations.items():
-            _set_nested(target, key.split("."), value)
+            # Build a flat dict of only the missing key-value pairs for the prompt
+            missing_values = {k: _get_nested(source, k.split(".")) for k in missing_keys}
 
-        _save_json(target_path, target)
-        translated[lang] = list(translations.keys())
+            response = await llm.ainvoke([
+                SystemMessage(content=(
+                    f"You are a professional translator. Translate the following JSON values "
+                    f"from {source_lang} to {lang}. "
+                    "Preserve any {{interpolation}} placeholders exactly as-is. "
+                    "Return ONLY valid JSON with the same keys and translated values."
+                )),
+                HumanMessage(content=json.dumps(missing_values, ensure_ascii=False)),
+            ])
+
+            try:
+                translations = json.loads(response.content)
+            except json.JSONDecodeError:
+                continue
+
+            # Merge translations back into target
+            for key, value in translations.items():
+                _set_nested(target, key.split("."), value)
+
+            _save_json(target_path, target)
+            translated.setdefault(lang, [])
+            translated[lang] += list(translations.keys())
 
     return translated
 
@@ -1117,6 +1170,7 @@ Then commit and open a PR with the updated translation files.
 ```python
 from langchain_core.messages import SystemMessage, HumanMessage
 from agents.config.llm import get_llm
+from agents.config.settings import settings
 from agents.tools.github_tools import get_failed_workflow_logs
 from agents.tools.jira_tools import create_jira_ticket
 
@@ -1176,9 +1230,6 @@ async def analyse_ci_failure(run_id: int, workflow_name: str, repo_ref: str) -> 
 
     analysis["jira_ticket"] = ticket
     return analysis
-
-
-from agents.config.settings import settings
 ```
 
 ### Step 2 — Wire the workflow graph
@@ -1475,13 +1526,13 @@ async def plan_feature(jira_key: str) -> FeaturePlan:
         SystemMessage(content=(
             f"You are a software architect for tj-sales.\n"
             f"Given a Jira ticket, produce a feature plan.\n\n"
-            f"Available modules: Activity, Catalog, Company, Competency, Contact, "
+            f"Available modules: Activity, Absence, Catalog, Company, Competency, Contact, "
             f"Disposition, DocumentSigning, EconomicClassification, EmploymentRequirement, "
             f"Finance, JobHub, LandingPage, Matching, Talent, Tenant, User\n\n"
             f"Namespace mapping: Sales modules → Gedat.TimeJobOnline.Sales, "
             f"People modules → Gedat.TimeJobOnline.People, "
             f"Disposition/Matching → Gedat.TimeJobOnline.Disposition\n\n"
-            f"Frontend apps: sales, dispo, people, admin\n\n"
+            f"Frontend apps: sales, dispo, people, admin, login, contract, candidates-landing-page\n\n"
             f"{load_convention('backend-patterns.md')}\n\n"
             "Respond with a JSON object matching this schema exactly:\n"
             '{"module": "...", "namespace_prefix": "...", "feature_name": "...", '
@@ -1738,7 +1789,7 @@ def route_after_backend(state: FeatureState) -> str:
 
 # ── Graph assembly ─────────────────────────────────────────────────────────────
 
-def build_feature_graph():
+def build_feature_graph(checkpointer) -> "CompiledGraph":
     g = StateGraph(FeatureState)
 
     g.add_node("plan", plan_node)
@@ -1761,10 +1812,7 @@ def build_feature_graph():
     g.add_edge("tests", "open_pr")
 
     g.add_edge("open_pr", END)
-    return g.compile(
-        checkpointer=AsyncSqliteSaver.from_conn_string("checkpoints.db"),
-        interrupt_before=["open_pr"],   # ← pause here for human review
-    )
+    return g.compile(checkpointer=checkpointer, interrupt_before=["open_pr"])
 ```
 
 #### Parallel scaffold with `Send`
@@ -1795,21 +1843,18 @@ def dispatch_scaffold(state: FeatureStateParallel) -> list[Send]:
     return targets
 
 
-def build_parallel_feature_graph():
+def build_parallel_feature_graph(checkpointer) -> "CompiledGraph":
     g = StateGraph(FeatureStateParallel)
 
     g.add_node("plan", plan_node)
-    g.add_node("dispatch_scaffold", dispatch_scaffold)   # fan-out
     g.add_node("backend", backend_node)
     g.add_node("frontend", frontend_node)
     g.add_node("tests", test_node)
     g.add_node("open_pr", open_pr_node)
 
     g.set_entry_point("plan")
-    g.add_conditional_edges("plan", route_after_plan, {
-        "error_end": END,
-        "scaffold": "dispatch_scaffold",
-    })
+    # dispatch_scaffold returns list[Send] for fan-out — it is a router, not a node
+    g.add_conditional_edges("plan", dispatch_scaffold)
 
     # Both backend and frontend run in parallel; LangGraph joins them automatically
     # before proceeding to tests (both must complete to advance)
@@ -1818,10 +1863,7 @@ def build_parallel_feature_graph():
     g.add_edge("tests", "open_pr")
     g.add_edge("open_pr", END)
 
-    return g.compile(
-        checkpointer=AsyncSqliteSaver.from_conn_string("checkpoints.db"),
-        interrupt_before=["open_pr"],
-    )
+    return g.compile(checkpointer=checkpointer, interrupt_before=["open_pr"])
 ```
 
 #### Human-in-the-loop: approving and resuming
@@ -1830,7 +1872,7 @@ When `interrupt_before=["open_pr"]` is set, the graph **pauses** after tests com
 
 ```python
 import asyncio
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from agents.config.checkpointer import get_checkpointer
 from agents.graphs.feature_workflow import build_feature_graph
 
 async def approve_and_resume(thread_id: str):
@@ -1838,32 +1880,34 @@ async def approve_and_resume(thread_id: str):
     Called by a developer (via CLI, Slack bot, or GitHub comment) to approve
     the scaffold and open the PR.
     """
-    graph = build_feature_graph()
+    async with get_checkpointer() as checkpointer:
+        graph = build_feature_graph(checkpointer)
 
-    # Inspect what the agent has done so far
-    state = await graph.aget_state(config={"configurable": {"thread_id": thread_id}})
-    plan = state.values.get("plan")
-    print(f"Approving scaffold for {plan.jira_key}: {plan.feature_name}")
-    print(f"Files written: {state.values.get('backend_result', {}).get('files', [])}")
+        # Inspect what the agent has done so far
+        state = await graph.aget_state(config={"configurable": {"thread_id": thread_id}})
+        plan = state.values.get("plan")
+        print(f"Approving scaffold for {plan.jira_key}: {plan.feature_name}")
+        print(f"Files written: {state.values.get('backend_result', {}).get('files', [])}")
 
-    # Resume — passing None as input continues from the checkpoint
-    result = await graph.ainvoke(
-        None,
-        config={"configurable": {"thread_id": thread_id}},
-    )
-    print(f"PR opened: #{result['pr_number']}")
+        # Resume — passing None as input continues from the checkpoint
+        result = await graph.ainvoke(
+            None,
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        print(f"PR opened: #{result['pr_number']}")
 
 
 # Trigger initial run (will pause before open_pr)
 async def trigger_feature(jira_key: str):
-    graph = build_feature_graph()
-    thread_id = f"feature-{jira_key}"
-    await graph.ainvoke(
-        {"jira_key": jira_key, "plan": None, "backend_result": None,
-         "frontend_result": None, "test_result": None, "pr_number": None, "error": None},
-        config={"configurable": {"thread_id": thread_id}},
-    )
-    print(f"Graph paused. Approve with: python -c \"asyncio.run(approve_and_resume('{thread_id}'))\"")
+    async with get_checkpointer() as checkpointer:
+        graph = build_feature_graph(checkpointer)
+        thread_id = f"feature-{jira_key}"
+        await graph.ainvoke(
+            {"jira_key": jira_key, "plan": None, "backend_result": None,
+             "frontend_result": None, "test_result": None, "pr_number": None, "error": None},
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        print(f"Graph paused. Approve with: python -c \"asyncio.run(approve_and_resume('{thread_id}'))\"")
 ```
 
 ---
@@ -2026,8 +2070,8 @@ if __name__ == "__main__":
 Add to `.env`:
 
 ```dotenv
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=ls__...
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls__...
 LANGCHAIN_PROJECT=tj-sales-agents
 ```
 
@@ -2230,7 +2274,7 @@ agents/
 Add to `requirements.txt`:
 
 ```text
-langsmith>=0.1.0             # already present — covers both tracing and evaluation SDK
+langsmith>=0.3.0             # already present — covers both tracing and evaluation SDK
 ```
 
 > **Tracked metrics:** see the evaluation document (`docs/langchain-multi-agent-evaluation.md § LangSmith Evaluation`) for the full benchmarking target table (compilation success rate, convention compliance, latency, cost per run).
@@ -2337,8 +2381,25 @@ Create `agents/Dockerfile`:
 ```dockerfile
 FROM python:3.11-slim
 
-# Install dotnet and node prerequisites for CLI tools
-RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
+# Install system dependencies including .NET 8 and Node 20
+# Required for dotnet CLI tools and nx/pnpm commands called by agents
+RUN apt-get update && apt-get install -y \
+    curl git wget apt-transport-https \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install .NET 8 SDK
+RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
+    && chmod +x dotnet-install.sh \
+    && ./dotnet-install.sh --channel 8.0 --install-dir /usr/local/dotnet \
+    && rm dotnet-install.sh
+ENV DOTNET_ROOT=/usr/local/dotnet
+ENV PATH=$PATH:$DOTNET_ROOT
+
+# Install Node 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g pnpm \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /agents
 COPY requirements.txt .
@@ -2393,7 +2454,7 @@ env:
   JIRA_API_TOKEN: ""
   JIRA_PROJECT_KEY: "TJS"
   REPO_ROOT: "/repo"
-  LANGCHAIN_TRACING_V2: "true"
+  LANGSMITH_TRACING: "true"
   LANGCHAIN_PROJECT: "tj-sales-agents"
 
 volumeMounts:
@@ -2453,7 +2514,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: TJS
           REPO_ROOT: ${{ github.workspace }}
-          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
 ```
 
 #### Automated eval on agent code changes
@@ -2487,8 +2548,8 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: TJS
           REPO_ROOT: ${{ github.workspace }}
-          LANGCHAIN_TRACING_V2: "true"
-          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGSMITH_TRACING: "true"
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGCHAIN_PROJECT: tj-sales-agents-ci
 ```
 

@@ -43,7 +43,7 @@ This document evaluates whether **LangChain** and its graph-based extension **La
 
 Understanding the current architecture is critical to assessing where agents add the most value:
 
-- **16 backend modules** (`Activity`, `Catalog`, `Company`, `Competency`, `Contact`, `Disposition`, `DocumentSigning`, `EconomicClassification`, `EmploymentRequirement`, `Finance`, `JobHub`, `LandingPage`, `Matching`, `Talent`, `Tenant`, `User`), each with their own Application / Domain / Endpoints / Infrastructure / Contracts / IntegrationEvents layers.
+- **17 backend modules** (`Activity`, `Absence`, `Catalog`, `Company`, `Competency`, `Contact`, `Disposition`, `DocumentSigning`, `EconomicClassification`, `EmploymentRequirement`, `Finance`, `JobHub`, `LandingPage`, `Matching`, `Talent`, `Tenant`, `User`), each with their own Application / Domain / Endpoints / Infrastructure / Contracts / IntegrationEvents layers. Note: `Absence` and `Catalog` share the same folder (`backend-v2/Modules/Absence/`) but have separate project namespaces.
 - **Frontend micro-frontends** (`core`, `sales`, `dispo`, `people`, `login`, `admin`, `contract`, `candidates-landing-page`) using Module Federation, auto-generated OpenAPI clients, and Transloco i18n.
 - **AI service** (`ai/`) running Python workers consuming Azure Service Bus messages and calling Azure OpenAI — already contains sentence-transformer embeddings, similarity search, and LLM-powered matching.
 - **Shared conventions**: CQRS, Result pattern, FluentValidation, Mapster, Scrutor DI, xUnit / AwesomeAssertions, Vitest, Playwright, GitVersion SemVer.
@@ -57,7 +57,7 @@ Understanding the current architecture is critical to assessing where agents add
 | **Purpose** | Framework for building LLM-powered apps with chains, tools, memory, and agents | Graph-based multi-agent orchestration layer built on top of LangChain |
 | **Paradigm** | Linear or branching chains | Stateful directed graphs with cycles, conditionals, parallel branches |
 | **Language** | Python-first; `langchain-js` available | Python-first |
-| **Maturity** | Production-grade since 2023 | Stable since 2024 |
+| **Maturity** | Production-grade; v1.x released 2025 | Stable; v1.x released 2025 |
 | **Key concepts** | `Tool`, `Agent`, `Chain`, `Memory`, `Callback` | `StateGraph`, `Node`, `Edge`, `Conditional`, `Checkpointer` |
 
 For complex, iterative, multi-step workflows (like development automation), **LangGraph is the right choice** — it enables loops, human-in-the-loop interruptions, parallel execution, and shared state between agents.
@@ -137,8 +137,8 @@ This is sufficient for simple pipelines but fundamentally inadequate for autonom
 Enable with two environment variables — no code changes needed:
 
 ```dotenv
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=ls__...
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls__...
 LANGCHAIN_PROJECT=tj-sales-agents
 ```
 
@@ -400,7 +400,7 @@ The orchestrator can live inside the existing `ai/` service directory or as a se
 
 ### 🟢 Technical Advantages
 
-1. **Shared Azure infrastructure** — The project already uses Azure OpenAI, Azure Service Bus, and Azure Monitor. LangChain integrates natively with all of these via `langchain-azure-openai` and `langchain-community` packages.
+1. **Shared Azure infrastructure** — The project already uses Azure OpenAI, Azure Service Bus, and Azure Monitor. LangChain integrates natively with all of these via the `langchain-openai` package.
 
 2. **Existing Python foundation** — The `ai/` service is already Python with `openai`, `pydantic`, `tenacity`, `azure-*` packages. Adding LangGraph is an incremental dependency, not a new language.
 

@@ -160,7 +160,7 @@ The system MUST provide the following specialised agents:
 
 ### 3.5 Observability & Evaluation
 
-**REQ-OBS-01** — All LLM calls, tool invocations, and graph node transitions MUST be automatically traced in **LangSmith** when `LANGCHAIN_TRACING_V2=true`. No code-level instrumentation (decorators, wrappers) should be required beyond the environment variable.
+**REQ-OBS-01** — All LLM calls, tool invocations, and graph node transitions MUST be automatically traced in **LangSmith** when `LANGSMITH_TRACING=true`. No code-level instrumentation (decorators, wrappers) should be required beyond the environment variable.
 
 **REQ-OBS-02** — LangSmith traces MUST be queryable to answer: why did the agent route to a given node, which prompt produced a specific output, and which node caused a latency spike.
 
@@ -263,12 +263,12 @@ The following packages MUST be pinned in `agents/requirements.txt`:
 
 | Package | Minimum Version | Purpose |
 |---|---|---|
-| `langchain` | 0.3.0 | LLM chains, tools, agents |
-| `langchain-core` | 0.3.0 | Core abstractions (`@tool`, `BaseMessage`) |
-| `langgraph` | 0.2.0 | Stateful graph orchestration |
-| `langchain-community` | 0.3.0 | Community integrations |
-| `langchain-openai` / `langchain-azure-openai` | 0.2.0 | Azure OpenAI chat model |
-| `langsmith` | 0.1.0 | Tracing and evaluation SDK |
+| `langchain` | 1.0.0 | LLM chains, tools, agents |
+| `langchain-core` | 1.0.0 | Core abstractions (`@tool`, `BaseMessage`) |
+| `langgraph` | 1.0.0 | Stateful graph orchestration |
+| `langgraph-checkpoint-sqlite` | 2.0.0 | Async SQLite checkpointer (`AsyncSqliteSaver`) |
+| `langchain-openai` | 0.3.0 | Azure OpenAI chat model |
+| `langsmith` | 0.3.0 | Tracing and evaluation SDK |
 | `httpx` | 0.27.0 | Async HTTP client (Jira, GitHub REST) |
 | `PyGithub` | 2.3.0 | GitHub API wrapper |
 | `fastapi` | 0.115.0 | Webhook HTTP server |
@@ -379,10 +379,10 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 | Requirement | Detail |
 |---|---|
 | **Account** | LangSmith account at `smith.langchain.com` (team plan recommended for shared dataset access) |
-| **API key** | `LANGCHAIN_API_KEY` — obtain from LangSmith → Settings → API Keys |
+| **API key** | `LANGSMITH_API_KEY` — obtain from LangSmith → Settings → API Keys |
 | **Project name** | `tj-sales-agents` (production), `tj-sales-agents-ci` (CI evaluation runs) |
 | **Dataset** | `scaffold-benchmark` — created once via `python -m agents.evals.create_dataset` |
-| **Tracing toggle** | `LANGCHAIN_TRACING_V2=true` enables tracing; set to `false` in unit tests to avoid noise |
+| **Tracing toggle** | `LANGSMITH_TRACING=true` enables tracing; set to `false` in unit tests to avoid noise |
 | **Data residency** | Verify LangSmith's data residency policy meets GDPR requirements — traces may contain Jira ticket content and code snippets |
 
 ---
@@ -399,7 +399,7 @@ All secrets MUST be stored in **Azure Key Vault** and MUST NOT be committed to t
 | `jira-api-token` | `JIRA_API_TOKEN` | Atlassian Jira API token |
 | `jira-user-email` | `JIRA_USER_EMAIL` | Email of the Jira service account |
 | `jira-base-url` | `JIRA_BASE_URL` | Atlassian instance URL |
-| `langsmith-api-key` | `LANGCHAIN_API_KEY` | LangSmith tracing + evaluation |
+| `langsmith-api-key` | `LANGSMITH_API_KEY` | LangSmith tracing + evaluation |
 | `webhook-secret` | `WEBHOOK_SECRET` | HMAC secret for GitHub webhook validation |
 
 Non-secret configuration (safe to store in Kubernetes ConfigMap or Helm values):
@@ -410,7 +410,7 @@ Non-secret configuration (safe to store in Kubernetes ConfigMap or Helm values):
 | `AZURE_OPENAI_MINI_DEPLOYMENT` | `gpt-4o-mini` | Mini model deployment name |
 | `GITHUB_REPO` | `Gedat-GmbH/tj-sales` | Repository identifier |
 | `JIRA_PROJECT_KEY` | `TJS` | Jira project key |
-| `LANGCHAIN_TRACING_V2` | `true` | Enable LangSmith tracing |
+| `LANGSMITH_TRACING` | `true` | Enable LangSmith tracing |
 | `LANGCHAIN_PROJECT` | `tj-sales-agents` | LangSmith project name |
 | `WEBHOOK_PORT` | `8080` | Port the webhook server listens on |
 
