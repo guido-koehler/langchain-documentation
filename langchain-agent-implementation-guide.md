@@ -759,6 +759,26 @@ Application / Domain / Endpoints / Infrastructure / Contracts / IntegrationEvent
 - Queries: inherit `BaseQuery<TResponse>`
 - Query Handlers: implement `IQueryHandler<TQuery, TResponse>`
 
+## Patch / Update Command Base Types
+Use the most specific base class for the operation:
+
+| Base class | Use when |
+|---|---|
+| `BasePatchCommand<T>` | Simple patch, no auth context needed |
+| `BasePatchCommandWithResourceId<T>` | Patch that includes a resource/entity ID |
+| `BasePatchCommandWithResourceAndUserId<T>` | Patch requiring both resource ID and user ID |
+| `BasePatchCommandWithTenant<T>` | Patch scoped to a specific tenant |
+| `BasePatchCommandWithExtraClaim<T>` | **Use when the authenticated user's `UserId` must be extracted from the JWT `ext` claim** (via FastEndpoints `[FromClaim]`). Required for all branch-access-controlled operations. |
+
+```csharp
+// Example: command that needs authenticated UserId from JWT ext claim
+public sealed class UpdateTalentCommand : BasePatchCommandWithExtraClaim<UpdateTalentResponse>
+{
+    public required Guid TalentId { get; init; }
+    // UserId is automatically populated from JWT ext claim by BasePatchCommandWithExtraClaim
+}
+```
+
 ## Result Pattern (NEVER throw exceptions from handlers)
 ```csharp
 // Return success
@@ -767,15 +787,65 @@ return Result.Success(value);
 return Result.Failure<T>(ModuleErrors.SomeError);
 ```
 
+## Object Mapping
+Use **Mapster** for all object mapping. Never use manual property assignment or AutoMapper.
+
+```csharp
+// Map domain entity → response DTO
+var response = entity.Adapt<EntityResponse>();
+
+// Map command → domain entity
+var entity = command.Adapt<Entity>();
+
+// Map with custom configuration (if needed)
+var config = new TypeAdapterConfig();
+config.NewConfig<Source, Destination>()
+    .Map(dest => dest.Name, src => src.FullName);
+var result = source.Adapt<Destination>(config);
+```
+
 ## Endpoints
-Inherit `BaseEndpoint<TRequest, TResponse>` or `BaseEndpoint<TRequest>`.
-Always call `await HandleError(result, ct)` on failure.
+Inherit `BaseEndpoint<TRequest, TResponse>` (with response body) or `BaseEndpoint<TRequest>` (no response body).
+**Always wrap the response DTO in `BaseResponseModel<T>`.**
+
+```csharp
+public class GetTenantByIdEndpoint : BaseEndpoint<GetTenantByIdRequest, BaseResponseModel<GetTenantByIdResponse>>
+{
+    public override void Configure()
+    {
+        Get("/tenant/{id}");
+        AuthSchemes(AuthenticationSchema.AzureAd);          // Standard endpoints
+        // AuthSchemes(AuthenticationSchema.IdentityServer); // Client-facing endpoints (e.g. feedback retrieval)
+        // AllowAnonymous();                                  // Public endpoints (combine with AuthSchemes for mixed auth/anon)
+    }
+
+    public override async Task HandleAsync(GetTenantByIdRequest request, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new GetTenantByIdQuery(request.Id), ct);
+        if (result.IsSuccess)
+            await Send.ResponseAsync(new BaseResponseModel<GetTenantByIdResponse>(result.Value), cancellation: ct);
+        else
+            await HandleError(result, ct);
+    }
+}
+```
 
 ## Validation
 Use FluentValidation. Register via `AddValidatorsFromAssembly`. Rule example:
 ```csharp
 RuleFor(x => x.BranchOfficeId).NotEmpty().NotEqual(Guid.Empty);
 ```
+
+**Do NOT call `_validator.ValidateAsync()` manually inside handlers.** The `ValidationPipelineBehavior`
+MediatR pipeline behavior runs FluentValidation automatically for every command/query. Explicit validator
+calls inside handlers are redundant.
+
+## MediatR Pipeline Behaviors (cross-cutting, auto-applied to every handler)
+- `ValidationPipelineBehavior` — runs FluentValidation; handlers only execute if input is valid
+- `TelemetryEnricherPipelineBehavior` — injects APM/telemetry context automatically
+- `ReferenceEnrichmentBehavior` — hydrates domain references automatically
+
+Do not replicate the logic of these behaviors inside handlers.
 
 ## DI Registration
 Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual registration needed.
@@ -785,25 +855,71 @@ Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual reg
 - People modules: `Gedat.TimeJobOnline.People.{Module}`
 - Disposition modules: `Gedat.TimeJobOnline.Disposition.{Module}`
 
-## Multi-tenancy Access Control
+## Cosmos DB Repository Registration
+Register repositories in `InfrastructureServiceInstaller`:
+```csharp
+services.AddRepositoryForTenant<TEntity>(options =>
+{
+    options.ContainerName = "entities";
+    options.UseSingleDatabase = true;  // shared DB across modules (vs. per-module DB)
+    // Partition key is typically "/id" for single-tenant documents
+});
+```
+Use **hierarchical partition keys (HPK)** to overcome the 20 GB per-partition limit where needed.
 
-- All endpoints that access tenant-scoped data MUST inject and call `IBranchOfficeAccessService` to validate that the requesting user belongs to the correct branch office.
-- Example: `await _branchOfficeAccessService.ValidateAsync(tenantId, userId, ct);`
-- This is defined in `Common.Application` and registered via Scrutor.
+## Multi-tenancy Access Control
+- All handlers that access branch-scoped data MUST inject and call `IBranchOfficeAccessService`.
+- **Correct access-check pattern:**
+```csharp
+// Load entity first, then check access
+var canAccess = await _branchOfficeAccessService.CanUserAccessBranchOffice(
+    entity.BranchOfficeId, request.UserId, request.ResourceId);
+if (!canAccess)
+    return Result.Failure<T>(AccessErrors.Unauthorized);
+```
+- For commands that need the authenticated `UserId`, use `BasePatchCommandWithExtraClaim<T>` (see above).
+
+## ElasticSearch Integration
+Five modules use ElasticSearch: **Talent, LandingPage, Contact, Company, Activity**.
+```csharp
+// Inject ISearchService from Common.Application.ElasticSearch
+// After create/update/delete, update the search index:
+await _searchService.IndexAsync(entity, cancellationToken);
+
+// Use ElasticSearchExtension helper methods for common search patterns
+// Reindexing for schema migrations:
+await _searchService.ReindexAsync(cancellationToken);
+```
+**Always check whether the target module uses ElasticSearch before generating infrastructure code.**
+If the module is in the list above, `InfrastructureServiceInstaller` must register the ElasticSearch
+services and all write operations must update the index.
 
 ## Integration Events (Cross-Module Communication)
-
 - Modules communicate asynchronously via integration events using MassTransit on Azure Service Bus.
 - Each module that publishes events defines them in its `[Module].IntegrationEvents` project.
 - Event classes follow the naming convention: `[Entity][Action]IntegrationEvent` (e.g., `TalentCreatedIntegrationEvent`).
 - Handlers implement `IConsumer<TEvent>` and are registered via the MassTransit `IServiceInstaller`.
 - Never use direct method calls across module boundaries — use integration events.
+
+## Additional Services
+Use these common services where appropriate — do not reinvent their functionality:
+
+| Service | Location | Use for |
+|---|---|---|
+| `IHangfireService` | `Common.Application/BackgroundJob/` | Scheduling background/recurring jobs via Hangfire |
+| `IFeatureFlagManagementService` | `Common.Application` | Reading Azure App Configuration feature flags |
+| `IAddressGeocodingService<TAddress>` | `Common.Application` | Address-to-coordinates conversion. Always call `HasAddressChanged()` on Update/Patch to avoid unnecessary Azure Maps API calls |
+| `ITelemetryEnricherContext` | `Common.Application/Telemetry/` | Enriching APM telemetry data |
 ````
 
 ### `agents/conventions/frontend-patterns.md`
 
 ```markdown
 # TJ-Sales Frontend Conventions
+
+> **IMPORTANT — Nx AI Agent Guidance:** Before generating any Nx-related code (project configuration,
+> generators, task runners, module federation, build targets), read and follow the guidance in
+> `frontend/AGENTS.md`. This file contains Nx-specific AI agent guidance tailored to this project.
 
 ## Components
 - Always use `changeDetection: ChangeDetectionStrategy.OnPush`
@@ -826,9 +942,29 @@ Use `ITransient`, `IScoped`, or `ISingleton` marker interfaces — no manual reg
 - Never call HttpClient directly in feature code
 - Regenerate after backend changes: `pnpm nx run shared:openapi-gen`
 
+## Forms
+- Use **reactive forms** for all form components
+- Use custom validators from `shared/src/lib/locale/` — do not write ad-hoc inline validators
+
+## UI Components
+- Use **PrimeNG** components for standard UI elements (`p-table`, `p-dialog`, `p-button`, `p-dropdown`, etc.)
+- Do not re-implement UI patterns that PrimeNG already provides
+- Use **Angular CDK** for low-level interaction primitives (overlay, drag-drop, etc.)
+
 ## Styling
 - TailwindCSS utility classes only
 - Use `tailwind-merge` for dynamic class composition
+- Custom theme lives in `theme/`
+
+## Module Federation — DO NOT MODIFY
+**Do NOT modify** remote entry files, module federation configuration, or app bootstrap files:
+- `module-federation.config.ts`
+- `app.routes.ts` (remote registrations)
+- `main.ts` (bootstrap)
+
+Scope all generated code to **feature-level components and services** within the existing app
+structure. The host/remote architecture (core as host; sales, dispo, people, login as remotes)
+must not be altered by scaffolded code.
 ```
 
 ### `agents/conventions/test-patterns.md`
@@ -1177,6 +1313,25 @@ from agents.tools.jira_tools import create_jira_ticket
 _SYSTEM = """
 You are a DevOps engineer analysing GitHub Actions failures for the tj-sales project.
 Given the raw log output of a failed workflow run, produce a structured diagnosis.
+
+## Known Workflows
+Use the workflow name to provide more specific diagnoses:
+- `main.yml`: Main deployment pipeline (build, test, Docker, Helm)
+- `pr-main.yml`: PR preview environment deployment
+- `staging.yml` / `production.yml`: Staging / production deployments (approval-gated)
+- `helm-deployment.yaml`: Reusable Helm chart deployment (called by other workflows)
+- `ui-test.yaml`: Playwright E2E tests (frontend)
+- `pull-request-closed.yml`: Ephemeral PR preview environment cleanup on PR close
+- `cleanup-resources.yaml` / `delete-resource.yml`: Azure resource lifecycle automation
+- `accent-push.yaml` / `accent-pull.yaml` / `rw-accent-push.yaml`: Translation file sync
+- `retry.yaml` / `rw-retry.yaml`: Deployment retry workflows
+
+## Category Definitions
+- `build-error`: Compilation failure (.NET `dotnet build`, Docker image build, Nx build)
+- `test-failure`: Failing unit tests (xUnit backend) or E2E tests (Playwright via `ui-test.yaml`)
+- `lint`: ESLint (frontend), dotnet format (backend), or **SonarQube quality gate failure** (backend)
+- `deployment`: Helm chart failure, Kubernetes apply error, Azure resource provisioning error
+- `other`: Anything not matching the above
 
 Respond in this exact JSON format:
 {
