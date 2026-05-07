@@ -39,7 +39,7 @@ validate_node ── should_retry() ───────┘
 ### 1. Prerequisites
 
 - Python 3.11+
-- An **Azure AI Foundry** project with a deployed chat model (e.g. `gpt-4.1`) — [create one here](https://learn.microsoft.com/azure/foundry/how-to/create-projects)
+- An **Azure AI Foundry** project with a deployed chat model (e.g. `gpt-5.4`) — [create one here](https://learn.microsoft.com/azure/foundry/how-to/create-projects)
 - Either `az login` (recommended) **or** a Foundry API key for local authentication
 - A **LangSmith** account (free tier is sufficient): [smith.langchain.com](https://smith.langchain.com)
 
@@ -71,7 +71,7 @@ cp .env.example .env
 # Then edit .env and fill in your values:
 #   AZURE_AI_PROJECT_ENDPOINT   ← Foundry project endpoint URL
 #   AZURE_AI_API_KEY            ← leave blank if using `az login`
-#   MODEL_DEPLOYMENT_NAME       ← e.g. "gpt-4.1"
+#   MODEL_DEPLOYMENT_NAME       ← e.g. "gpt-5.4"
 #   LANGSMITH_API_KEY           ← get from smith.langchain.com → Settings → API Keys
 #   LANGSMITH_TRACING=true
 #   LANGCHAIN_PROJECT=tj-sales-hello-world

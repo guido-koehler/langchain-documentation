@@ -69,7 +69,7 @@ All agents are orchestrated using **LangGraph** and observed via **LangSmith**.
 
 Agents and LLMs are hosted on **Microsoft Azure AI Foundry** — no separate Azure OpenAI instance is required.
 
-- Models (e.g., `gpt-4.1`, Mistral, Llama) are deployed as endpoints inside a **Foundry project**.
+- Models (e.g., `gpt-5.4`, `gpt-5.4-mini`) are deployed as endpoints inside a **Foundry project**.
 - LangChain/LangGraph connects to Foundry via the [`langchain-azure-ai`](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-agents) package.
 - Authentication uses `DefaultAzureCredential` (supports managed identity, Azure CLI login, environment variables).
 - Observability (traces for agent steps, tool calls, LLM calls) flows through **OpenTelemetry → Application Insights**, visible in the Foundry portal under **Observability → Traces**.
@@ -84,7 +84,7 @@ pip install langchain-azure-ai[tools,opentelemetry] azure-identity
 
 ```bash
 AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
-MODEL_DEPLOYMENT_NAME=gpt-4.1
+MODEL_DEPLOYMENT_NAME=gpt-5.4
 APPLICATION_INSIGHTS_CONNECTION_STRING=<connection-string>   # for tracing
 ```
 

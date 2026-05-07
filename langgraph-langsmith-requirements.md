@@ -226,10 +226,10 @@ The system MUST provide the following specialised agents:
 
 | ID | Requirement |
 |---|---|
-| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`gpt-4.1`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`gpt-4.1-mini`) |
+| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`gpt-5.4`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`gpt-5.4-mini`) |
 | NFR-COST-02 | PR diffs sent to the Code Review Agent MUST be truncated to a maximum of **30,000 characters** to limit token consumption |
 | NFR-COST-03 | LangSmith tracing token counts per run MUST be reviewed monthly; runs exceeding a configurable threshold MUST trigger an Azure Monitor alert |
-| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment (`gpt-4.1-mini`) to minimise cost per PR |
+| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment (`gpt-5.4-mini`) to minimise cost per PR |
 
 ---
 
@@ -295,7 +295,7 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 
 | Resource | Purpose | Status |
 |---|---|---|
-| **Azure AI Foundry** | LLM inference — models (e.g. `gpt-4.1`, `gpt-4.1-mini`) deployed as endpoints inside a Foundry project; also hosts Foundry Agent Service and built-in OpenTelemetry observability | 🆕 New resource required |
+| **Azure AI Foundry** | LLM inference — models (e.g. `gpt-5.4`, `gpt-5.4-mini`) deployed as endpoints inside a Foundry project; also hosts Foundry Agent Service and built-in OpenTelemetry observability | 🆕 New resource required |
 | **Azure Kubernetes Service (AKS)** | Hosts the agent service container | ✅ Already exists |
 | **Azure Container Registry (ACR)** | Stores the `tj-sales-agents` Docker image | ✅ Already exists |
 | **Azure Key Vault** | Stores all secrets (API keys, tokens) | ✅ Already exists |
@@ -336,7 +336,7 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 | Requirement | Detail |
 |---|---|
 | **Foundry project** | A Foundry project MUST be created; both model deployments and the Foundry Agent Service run within this project |
-| **Model deployments** | Two deployments required: a primary (e.g. `gpt-4.1`) for code generation and a mini (e.g. `gpt-4.1-mini`) for translation, summaries, and CI analysis |
+| **Model deployments** | Two deployments required: a primary (e.g. `gpt-5.4`) for code generation and a mini (e.g. `gpt-5.4-mini`) for translation, summaries, and CI analysis |
 | **API version** | Foundry SDK via `langchain-azure-ai`; internally uses the project endpoint `https://<resource>.services.ai.azure.com/api/projects/<project>` |
 | **Temperature** | 0 for all code generation tasks (determinism); 0.3 for natural-language tasks (release notes, translations) |
 | **Max retries** | 3 (handled by `tenacity`; `langchain-azure-ai` model client does not expose `max_retries` directly) |
@@ -350,7 +350,7 @@ from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from azure.identity import DefaultAzureCredential
 
 model = AzureAIChatCompletionsModel(
-    model_name=os.environ["MODEL_DEPLOYMENT_NAME"],  # e.g. "gpt-4.1"
+    model_name=os.environ["MODEL_DEPLOYMENT_NAME"],  # e.g. "gpt-5.4"
     endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
     credential=DefaultAzureCredential(),
 )
@@ -423,8 +423,8 @@ Non-secret configuration (safe to store in Kubernetes ConfigMap or Helm values):
 
 | Variable | Example Value | Description |
 |---|---|---|
-| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Primary model deployment name in Foundry |
-| `MODEL_MINI_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Mini model deployment name in Foundry |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-5.4` | Primary model deployment name in Foundry |
+| `MODEL_MINI_DEPLOYMENT_NAME` | `gpt-5.4-mini` | Mini model deployment name in Foundry |
 | `GITHUB_REPO` | `Gedat-GmbH/tj-sales` | Repository identifier |
 | `JIRA_PROJECT_KEY` | `TJS` | Jira project key |
 | `LANGSMITH_TRACING` | `true` | Enable LangSmith tracing |

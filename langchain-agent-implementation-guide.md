@@ -178,8 +178,8 @@ pip install -r requirements.txt
 # Azure OpenAI
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-key
-AZURE_OPENAI_DEPLOYMENT=gpt-4o          # deployment name for scaffolding / review
-AZURE_OPENAI_MINI_DEPLOYMENT=gpt-4o-mini  # cheaper model for translation / summaries
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4          # deployment name for scaffolding / review
+AZURE_OPENAI_MINI_DEPLOYMENT=gpt-5.4-mini  # cheaper model for translation / summaries
 
 # GitHub
 GITHUB_TOKEN=ghp_...
@@ -223,8 +223,8 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment: str = "gpt-4o"
-    azure_openai_mini_deployment: str = "gpt-4o-mini"
+    azure_openai_deployment: str = "gpt-5.4"
+    azure_openai_mini_deployment: str = "gpt-5.4-mini"
 
     # GitHub
     github_token: str
@@ -2601,7 +2601,7 @@ service:
 env:
   AZURE_OPENAI_ENDPOINT: ""        # injected from Azure Key Vault via CSI driver
   AZURE_OPENAI_API_KEY: ""
-  AZURE_OPENAI_DEPLOYMENT: "gpt-4o"
+  AZURE_OPENAI_DEPLOYMENT: "gpt-5.4"
   GITHUB_TOKEN: ""
   GITHUB_REPO: "Gedat-GmbH/tj-sales"
   JIRA_BASE_URL: ""

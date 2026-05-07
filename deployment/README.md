@@ -59,9 +59,9 @@ models into the project:
 1. Go to the [Azure Portal link](https://portal.azure.com) printed in the outputs.
 2. Navigate to the Foundry Hub → **Launch in AI Foundry portal**.
 3. Open the `agentic-development-project` project.
-4. Go to **Models + endpoints** → **Deploy model** → choose `gpt-4.1` (primary)
-   and `gpt-4.1-mini` (mini).
-5. Set `MODEL_DEPLOYMENT_NAME=gpt-4.1` in `Agent/.env`.
+4. Go to **Models + endpoints** → **Deploy model** → choose `gpt-5.4` (primary)
+   and `gpt-5.4-mini` (mini).
+5. Set `MODEL_DEPLOYMENT_NAME=gpt-5.4` in `Agent/.env`.
 
 ## Tear down
 
