@@ -226,10 +226,10 @@ The system MUST provide the following specialised agents:
 
 | ID | Requirement |
 |---|---|
-| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`claude-sonnet-4-6`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`claude-haiku-4-5`) |
+| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`gpt-4.1`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`gpt-4.1-mini`) |
 | NFR-COST-02 | PR diffs sent to the Code Review Agent MUST be truncated to a maximum of **30,000 characters** to limit token consumption |
 | NFR-COST-03 | LangSmith tracing token counts per run MUST be reviewed monthly; runs exceeding a configurable threshold MUST trigger an Azure Monitor alert |
-| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment (`claude-haiku-4-5`) to minimise cost per PR |
+| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment (`gpt-4.1-mini`) to minimise cost per PR |
 
 ---
 
@@ -267,8 +267,7 @@ The following packages MUST be pinned in `agents/requirements.txt`:
 | `langchain-core` | 1.0.0 | Core abstractions (`@tool`, `BaseMessage`) |
 | `langgraph` | 1.0.0 | Stateful graph orchestration |
 | `langgraph-checkpoint-sqlite` | 2.0.0 | Async SQLite checkpointer (`AsyncSqliteSaver`) |
-| `langchain-anthropic` | 0.3.0 | Claude model client (`ChatAnthropic`) for primary and mini models |
-| `langchain-azure-ai[opentelemetry]` | 0.1.0 | OpenTelemetry tracing integration with Azure AI Foundry |
+| `langchain-azure-ai[tools,opentelemetry]` | 0.1.0 | Azure AI Foundry model client + OpenTelemetry tracing |
 | `azure-identity` | 1.17.0 | `DefaultAzureCredential` for Managed Identity auth |
 | `langsmith` | 0.3.0 | Tracing and evaluation SDK |
 | `httpx` | 0.27.0 | Async HTTP client (Jira, GitHub REST) |
@@ -296,7 +295,7 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 
 | Resource | Purpose | Status |
 |---|---|---|
-| **Azure AI Foundry** | LLM inference — Claude models (`claude-sonnet-4-6`, `claude-haiku-4-5`) deployed as serverless endpoints inside a Foundry project; also hosts Foundry Agent Service and built-in OpenTelemetry observability | 🆕 New resource required |
+| **Azure AI Foundry** | LLM inference — models (e.g. `gpt-4.1`, `gpt-4.1-mini`) deployed as endpoints inside a Foundry project; also hosts Foundry Agent Service and built-in OpenTelemetry observability | 🆕 New resource required |
 | **Azure Kubernetes Service (AKS)** | Hosts the agent service container | ✅ Already exists |
 | **Azure Container Registry (ACR)** | Stores the `tj-sales-agents` Docker image | ✅ Already exists |
 | **Azure Key Vault** | Stores all secrets (API keys, tokens) | ✅ Already exists |
@@ -337,35 +336,23 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 | Requirement | Detail |
 |---|---|
 | **Foundry project** | A Foundry project MUST be created; both model deployments and the Foundry Agent Service run within this project |
-| **Model deployments** | Two deployments required: primary (`claude-sonnet-4-6`) for code generation and mini (`claude-haiku-4-5`) for translation, summaries, and CI analysis |
-| **API version** | Foundry SDK via `langchain-anthropic` (`ChatAnthropic`); uses the Foundry project endpoint as `base_url` |
+| **Model deployments** | Two deployments required: a primary (e.g. `gpt-4.1`) for code generation and a mini (e.g. `gpt-4.1-mini`) for translation, summaries, and CI analysis |
+| **API version** | Foundry SDK via `langchain-azure-ai`; internally uses the project endpoint `https://<resource>.services.ai.azure.com/api/projects/<project>` |
 | **Temperature** | 0 for all code generation tasks (determinism); 0.3 for natural-language tasks (release notes, translations) |
-| **Max retries** | 3 (configured directly on `ChatAnthropic`) |
-| **Authentication** | `AZURE_AI_API_KEY` — the Azure-issued key for the Claude serverless deployment; injected from Key Vault in production |
+| **Max retries** | 3 (handled by `tenacity`; `langchain-azure-ai` model client does not expose `max_retries` directly) |
+| **Authentication** | `DefaultAzureCredential` in all environments — API key fallback only for local dev via `AZURE_AI_API_KEY`; Managed Identity (role: **Azure AI User**) in production |
 | **Observability** | All LLM calls and agent steps are traced via OpenTelemetry and visible in **Foundry portal → Observability → Traces** (linked to the existing Application Insights resource) |
 
 **Python client setup:**
 
 ```python
-import os
-from langchain_anthropic import ChatAnthropic
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from azure.identity import DefaultAzureCredential
 
-# Primary model — complex reasoning, code generation
-primary_llm = ChatAnthropic(
-    model=os.environ.get("MODEL_DEPLOYMENT_NAME", "claude-sonnet-4-6"),
-    api_key=os.environ["AZURE_AI_API_KEY"],
-    base_url=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-    temperature=0,
-    max_retries=3,
-)
-
-# Mini model — fast, high-volume tasks
-mini_llm = ChatAnthropic(
-    model=os.environ.get("MODEL_MINI_DEPLOYMENT_NAME", "claude-haiku-4-5"),
-    api_key=os.environ["AZURE_AI_API_KEY"],
-    base_url=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-    temperature=0,
-    max_retries=3,
+model = AzureAIChatCompletionsModel(
+    model_name=os.environ["MODEL_DEPLOYMENT_NAME"],  # e.g. "gpt-4.1"
+    endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+    credential=DefaultAzureCredential(),
 )
 ```
 
@@ -436,8 +423,8 @@ Non-secret configuration (safe to store in Kubernetes ConfigMap or Helm values):
 
 | Variable | Example Value | Description |
 |---|---|---|
-| `MODEL_DEPLOYMENT_NAME` | `claude-sonnet-4-6` | Primary model deployment name in Foundry |
-| `MODEL_MINI_DEPLOYMENT_NAME` | `claude-haiku-4-5` | Mini model deployment name in Foundry |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Primary model deployment name in Foundry |
+| `MODEL_MINI_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Mini model deployment name in Foundry |
 | `GITHUB_REPO` | `Gedat-GmbH/tj-sales` | Repository identifier |
 | `JIRA_PROJECT_KEY` | `TJS` | Jira project key |
 | `LANGSMITH_TRACING` | `true` | Enable LangSmith tracing |

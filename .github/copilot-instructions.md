@@ -69,24 +69,22 @@ All agents are orchestrated using **LangGraph** and observed via **LangSmith**.
 
 Agents and LLMs are hosted on **Microsoft Azure AI Foundry** — no separate Azure OpenAI instance is required.
 
-- Models (`claude-sonnet-4-6` for complex tasks, `claude-haiku-4-5` for fast/cheap tasks) are deployed as serverless endpoints inside a **Foundry project**.
-- LangChain/LangGraph connects to the Claude models via the [`langchain-anthropic`](https://python.langchain.com/docs/integrations/providers/anthropic/) package, using the Foundry project endpoint as `base_url`.
-- Authentication uses an **Azure-issued API key** for the Claude serverless deployments (`AZURE_AI_API_KEY`); injected from Key Vault in production.
+- Models (e.g., `gpt-4.1`, Mistral, Llama) are deployed as endpoints inside a **Foundry project**.
+- LangChain/LangGraph connects to Foundry via the [`langchain-azure-ai`](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-agents) package.
+- Authentication uses `DefaultAzureCredential` (supports managed identity, Azure CLI login, environment variables).
 - Observability (traces for agent steps, tool calls, LLM calls) flows through **OpenTelemetry → Application Insights**, visible in the Foundry portal under **Observability → Traces**.
 
 ### Required packages
 
 ```bash
-pip install langchain-anthropic langchain-azure-ai[opentelemetry] azure-identity
+pip install langchain-azure-ai[tools,opentelemetry] azure-identity
 ```
 
 ### Required environment variables
 
 ```bash
 AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
-AZURE_AI_API_KEY=<azure-foundry-api-key-for-claude-deployments>
-MODEL_DEPLOYMENT_NAME=claude-sonnet-4-6          # primary: scaffold, review, planning
-MODEL_MINI_DEPLOYMENT_NAME=claude-haiku-4-5      # mini: translation, summaries, CI analysis
+MODEL_DEPLOYMENT_NAME=gpt-4.1
 APPLICATION_INSIGHTS_CONNECTION_STRING=<connection-string>   # for tracing
 ```
 
