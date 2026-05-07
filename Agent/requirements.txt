@@ -1,0 +1,14 @@
+# Core LangChain / LangGraph stack
+langgraph==0.2.56
+langchain==0.3.14
+langchain-azure-ai[opentelemetry]>=0.1.0
+
+# LangSmith tracing (optional but strongly recommended)
+langsmith==0.1.147
+
+# Azure authentication (DefaultAzureCredential — works for local dev + Managed Identity)
+azure-identity>=1.17.0
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.10.4

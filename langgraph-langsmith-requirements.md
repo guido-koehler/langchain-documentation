@@ -33,7 +33,7 @@
    - 6.2 [Deployment Target](#62-deployment-target)
    - 6.3 [State Persistence](#63-state-persistence)
 7. [Integration Requirements](#7-integration-requirements)
-   - 7.1 [Azure OpenAI](#71-azure-openai)
+   - 7.1 [Azure AI Foundry](#71-azure-ai-foundry)
    - 7.2 [Jira (Atlassian)](#72-jira-atlassian)
    - 7.3 [GitHub](#73-github)
    - 7.4 [LangSmith](#74-langsmith)
@@ -59,7 +59,7 @@ Enable **Agentic Driven Development** — a model where AI agents autonomously h
 - Eight specialised AI agents (Planner, Backend Scaffold, Frontend Scaffold, Test Writer, Code Review, CI/CD Monitor, Translation, Release Notes)
 - LangGraph orchestration layer connecting agents into multi-step workflows
 - LangSmith tracing, debugging, and evaluation pipeline
-- Integration with Jira (planning), GitHub (PRs, Actions), and the existing Azure OpenAI deployment
+- Integration with Jira (planning), GitHub (PRs, Actions), and an **Azure AI Foundry** project for LLM inference
 - Deployment as a containerised service in the existing AKS cluster
 
 ### Out of Scope
@@ -97,7 +97,7 @@ The system MUST provide the following specialised agents:
 | AGT-04 | **Test Writer** | Generate xUnit unit tests (AwesomeAssertions, AutoFixture, Moq); run `dotnet test --filter .UnitTest` | Backend Scaffold output |
 | AGT-05 | **Code Review** | Review PR diffs for convention violations (Result pattern, FluentValidation, IBranchOfficeAccessService, OnPush, i18n); post inline GitHub review comments; post summary to linked Jira ticket | GitHub webhook (PR opened / synchronize) |
 | AGT-06 | **CI/CD Monitor** | Fetch failed GitHub Actions logs; perform LLM root-cause analysis; create Jira bug ticket; optionally open a fix PR | GitHub webhook (workflow_run failed) |
-| AGT-07 | **Translation** | Detect untranslated Transloco keys in `assets/i18n/`; generate German translations via Azure OpenAI; open a PR | Pre-commit hook or nightly schedule |
+| AGT-07 | **Translation** | Detect untranslated Transloco keys in `assets/i18n/`; generate German translations via Azure AI Foundry; open a PR | Pre-commit hook or nightly schedule |
 | AGT-08 | **Release Notes** | Aggregate merged PRs since last tag; group by module; generate Markdown release notes; prepend to `CHANGELOG.md` | GitHub webhook (tag created) |
 
 ### 3.2 Workflow Orchestration
@@ -195,7 +195,7 @@ The system MUST provide the following specialised agents:
 | ID | Requirement |
 |---|---|
 | NFR-REL-01 | Every agent node MUST be independently retryable via the LangGraph Checkpointer — a failure in one node MUST NOT require restarting the entire workflow from scratch |
-| NFR-REL-02 | All external HTTP calls (Jira REST, GitHub REST, Azure OpenAI) MUST use **exponential back-off retry** with at least 3 attempts (implemented via `tenacity`) |
+| NFR-REL-02 | All external HTTP calls (Jira REST, GitHub REST, Azure AI Foundry) MUST use **exponential back-off retry** with at least 3 attempts (implemented via `tenacity`) |
 | NFR-REL-03 | Build-fix cycles MUST have a configurable hard limit (`MAX_FIX_ATTEMPTS`, default 3) to prevent infinite loops |
 | NFR-REL-04 | Agent failures MUST produce a recoverable artefact (draft PR or Jira comment) — silent failures are not acceptable |
 | NFR-REL-05 | The webhook server MUST remain available even while long-running agent workflows execute in the background |
@@ -206,7 +206,7 @@ The system MUST provide the following specialised agents:
 |---|---|
 | NFR-SEC-01 | All secrets (API keys, tokens) MUST be stored in Azure Key Vault and injected into the container via the CSI Secrets Store driver — they MUST NOT be committed to the repository |
 | NFR-SEC-02 | GitHub webhook payloads MUST be validated with HMAC-SHA256 before any processing |
-| NFR-SEC-03 | The agent service MUST run with a **dedicated Azure Managed Identity** with least-privilege access to Azure OpenAI and Key Vault — no shared credentials with the backend service |
+| NFR-SEC-03 | The agent service MUST run with a **dedicated Azure Managed Identity** with least-privilege access to Azure AI Foundry (role: **Azure AI User**) and Key Vault — no shared credentials with the backend service |
 | NFR-SEC-04 | The GitHub PAT MUST be scoped to the minimum required permissions (see REQ-GH-05) and MUST be rotated at least every 90 days |
 | NFR-SEC-05 | AI-generated code MUST NOT be auto-merged — a human reviewer MUST approve all agent-generated PRs before merging |
 | NFR-SEC-06 | The agent MUST NOT have write access to `main` or `staging` branches directly — all changes go through PRs |
@@ -226,10 +226,10 @@ The system MUST provide the following specialised agents:
 
 | ID | Requirement |
 |---|---|
-| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`gpt-4o`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`gpt-4o-mini`) |
+| NFR-COST-01 | High-complexity tasks (scaffold, code review, planner) MUST use the primary deployment (`gpt-4.1`); low-complexity tasks (translation, summaries, release notes) MUST use the mini deployment (`gpt-4.1-mini`) |
 | NFR-COST-02 | PR diffs sent to the Code Review Agent MUST be truncated to a maximum of **30,000 characters** to limit token consumption |
 | NFR-COST-03 | LangSmith tracing token counts per run MUST be reviewed monthly; runs exceeding a configurable threshold MUST trigger an Azure Monitor alert |
-| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment to minimise cost per PR |
+| NFR-COST-04 | The CI evaluation workflow (`agent-eval.yml`) MUST use the mini deployment (`gpt-4.1-mini`) to minimise cost per PR |
 
 ---
 
@@ -267,7 +267,8 @@ The following packages MUST be pinned in `agents/requirements.txt`:
 | `langchain-core` | 1.0.0 | Core abstractions (`@tool`, `BaseMessage`) |
 | `langgraph` | 1.0.0 | Stateful graph orchestration |
 | `langgraph-checkpoint-sqlite` | 2.0.0 | Async SQLite checkpointer (`AsyncSqliteSaver`) |
-| `langchain-openai` | 0.3.0 | Azure OpenAI chat model |
+| `langchain-azure-ai[tools,opentelemetry]` | 0.1.0 | Azure AI Foundry model client + OpenTelemetry tracing |
+| `azure-identity` | 1.17.0 | `DefaultAzureCredential` for Managed Identity auth |
 | `langsmith` | 0.3.0 | Tracing and evaluation SDK |
 | `httpx` | 0.27.0 | Async HTTP client (Jira, GitHub REST) |
 | `PyGithub` | 2.3.0 | GitHub API wrapper |
@@ -294,11 +295,11 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 
 | Resource | Purpose | Status |
 |---|---|---|
-| **Azure OpenAI** | LLM inference (`gpt-4o`, `gpt-4o-mini` deployments) | ✅ Already exists (shared with `ai/`) |
+| **Azure AI Foundry** | LLM inference — models (e.g. `gpt-4.1`, `gpt-4.1-mini`) deployed as endpoints inside a Foundry project; also hosts Foundry Agent Service and built-in OpenTelemetry observability | 🆕 New resource required |
 | **Azure Kubernetes Service (AKS)** | Hosts the agent service container | ✅ Already exists |
 | **Azure Container Registry (ACR)** | Stores the `tj-sales-agents` Docker image | ✅ Already exists |
 | **Azure Key Vault** | Stores all secrets (API keys, tokens) | ✅ Already exists |
-| **Azure Application Insights** | Ingests structured JSON logs from agent runs | ✅ Already exists |
+| **Azure Application Insights** | Ingests structured JSON logs and OpenTelemetry traces from agent runs (linked to Foundry project) | ✅ Already exists |
 | **Azure Service Bus** | Optional: decouple webhook triggers from agent execution for high-volume scenarios | ⚠️ Available — not required for MVP |
 | **Redis Cache** | Required for multi-pod `AsyncRedisSaver` checkpointer | ⚠️ Required for horizontal scaling; not needed for single-pod MVP |
 
@@ -330,15 +331,30 @@ The following Azure resources MUST exist or be provisioned before deploying agen
 
 ## 7. Integration Requirements
 
-### 7.1 Azure OpenAI
+### 7.1 Azure AI Foundry
 
 | Requirement | Detail |
 |---|---|
-| **Deployments** | Two deployments required: a primary (e.g. `gpt-4o`) for code generation and a mini (e.g. `gpt-4o-mini`) for translation, summaries, and CI analysis |
-| **API version** | `2024-08-01-preview` or newer |
+| **Foundry project** | A Foundry project MUST be created; both model deployments and the Foundry Agent Service run within this project |
+| **Model deployments** | Two deployments required: a primary (e.g. `gpt-4.1`) for code generation and a mini (e.g. `gpt-4.1-mini`) for translation, summaries, and CI analysis |
+| **API version** | Foundry SDK via `langchain-azure-ai`; internally uses the project endpoint `https://<resource>.services.ai.azure.com/api/projects/<project>` |
 | **Temperature** | 0 for all code generation tasks (determinism); 0.3 for natural-language tasks (release notes, translations) |
-| **Max retries** | 3 (handled by `AzureChatOpenAI(max_retries=3)`) |
-| **Authentication** | API key via `AZURE_OPENAI_API_KEY` for local dev; Managed Identity in production |
+| **Max retries** | 3 (handled by `tenacity`; `langchain-azure-ai` model client does not expose `max_retries` directly) |
+| **Authentication** | `DefaultAzureCredential` in all environments — API key fallback only for local dev via `AZURE_AI_API_KEY`; Managed Identity (role: **Azure AI User**) in production |
+| **Observability** | All LLM calls and agent steps are traced via OpenTelemetry and visible in **Foundry portal → Observability → Traces** (linked to the existing Application Insights resource) |
+
+**Python client setup:**
+
+```python
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from azure.identity import DefaultAzureCredential
+
+model = AzureAIChatCompletionsModel(
+    model_name=os.environ["MODEL_DEPLOYMENT_NAME"],  # e.g. "gpt-4.1"
+    endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+    credential=DefaultAzureCredential(),
+)
+```
 
 ### 7.2 Jira (Atlassian)
 
@@ -393,8 +409,9 @@ All secrets MUST be stored in **Azure Key Vault** and MUST NOT be committed to t
 
 | Secret Name (Key Vault) | Environment Variable | Description |
 |---|---|---|
-| `azure-openai-endpoint` | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI resource URL |
-| `azure-openai-api-key` | `AZURE_OPENAI_API_KEY` | Azure OpenAI access key |
+| `azure-ai-project-endpoint` | `AZURE_AI_PROJECT_ENDPOINT` | Azure AI Foundry project endpoint URL |
+| `azure-ai-api-key` | `AZURE_AI_API_KEY` | Foundry API key (local dev only; Managed Identity used in production) |
+| `app-insights-connection-string` | `APPLICATION_INSIGHTS_CONNECTION_STRING` | Application Insights connection string for OpenTelemetry tracing |
 | `github-pat-agents` | `GITHUB_TOKEN` | GitHub PAT for agent operations |
 | `jira-api-token` | `JIRA_API_TOKEN` | Atlassian Jira API token |
 | `jira-user-email` | `JIRA_USER_EMAIL` | Email of the Jira service account |
@@ -406,8 +423,8 @@ Non-secret configuration (safe to store in Kubernetes ConfigMap or Helm values):
 
 | Variable | Example Value | Description |
 |---|---|---|
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Primary model deployment name |
-| `AZURE_OPENAI_MINI_DEPLOYMENT` | `gpt-4o-mini` | Mini model deployment name |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Primary model deployment name in Foundry |
+| `MODEL_MINI_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Mini model deployment name in Foundry |
 | `GITHUB_REPO` | `Gedat-GmbH/tj-sales` | Repository identifier |
 | `JIRA_PROJECT_KEY` | `TJS` | Jira project key |
 | `LANGSMITH_TRACING` | `true` | Enable LangSmith tracing |
