@@ -47,8 +47,10 @@ Before writing any code, ensure the following are in place:
 
 | Requirement | Where to get it | Environment variable |
 |---|---|---|
-| Azure OpenAI endpoint + key | Azure Portal → your OpenAI resource | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
-| Azure OpenAI deployment name | Azure AI Studio → Deployments | `AZURE_OPENAI_DEPLOYMENT` |
+| Azure AI Foundry project endpoint | Azure Portal → Foundry project → Overview → Project endpoint | `AZURE_AI_PROJECT_ENDPOINT` |
+| Azure AI API key for Claude deployments | Foundry project → Models + endpoints → your Claude deployment → Keys | `AZURE_AI_API_KEY` |
+| Primary model deployment name | Foundry project → Models + endpoints | `MODEL_DEPLOYMENT_NAME` (default: `claude-sonnet-4-6`) |
+| Mini model deployment name | Foundry project → Models + endpoints | `MODEL_MINI_DEPLOYMENT_NAME` (default: `claude-haiku-4-5`) |
 | GitHub Personal Access Token (PAT) with `repo`, `pull_requests`, `actions` scopes | GitHub → Settings → Developer settings → PAT | `GITHUB_TOKEN` |
 | Jira API token | `id.atlassian.com` → Security → API tokens | `JIRA_API_TOKEN` |
 | Jira base URL + user email | Your Atlassian instance URL | `JIRA_BASE_URL`, `JIRA_USER_EMAIL` |
@@ -175,11 +177,15 @@ pip install -r requirements.txt
 ### `agents/.env.example`
 
 ```dotenv
-# Azure OpenAI
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_API_KEY=your-key
-AZURE_OPENAI_DEPLOYMENT=gpt-4o          # deployment name for scaffolding / review
-AZURE_OPENAI_MINI_DEPLOYMENT=gpt-4o-mini  # cheaper model for translation / summaries
+# Azure AI Foundry
+AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+# Azure-issued API key for the Claude serverless deployments in Foundry.
+# In production (AKS) this is injected from Key Vault — never hardcode it.
+AZURE_AI_API_KEY=your-azure-foundry-key
+
+# Claude model deployment names (must match the names you chose in Foundry)
+MODEL_DEPLOYMENT_NAME=claude-sonnet-4-6        # primary: complex tasks (scaffold, review, planning)
+MODEL_MINI_DEPLOYMENT_NAME=claude-haiku-4-5    # mini: fast/cheap tasks (translation, summaries)
 
 # GitHub
 GITHUB_TOKEN=ghp_...
@@ -220,11 +226,11 @@ from pathlib import Path
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Azure OpenAI
-    azure_openai_endpoint: str
-    azure_openai_api_key: str
-    azure_openai_deployment: str = "gpt-4o"
-    azure_openai_mini_deployment: str = "gpt-4o-mini"
+    # Azure AI Foundry / Claude
+    azure_ai_project_endpoint: str
+    azure_ai_api_key: str
+    model_deployment: str = "claude-sonnet-4-6"
+    model_mini_deployment: str = "claude-haiku-4-5"
 
     # GitHub
     github_token: str
@@ -252,25 +258,24 @@ settings = Settings()
 **`agents/config/llm.py`**
 
 ```python
-from langchain_openai import AzureChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from agents.config.settings import settings
 
 
-def get_llm(mini: bool = False) -> AzureChatOpenAI:
+def get_llm(mini: bool = False) -> ChatAnthropic:
     """
-    Returns an Azure OpenAI chat model.
+    Returns a Claude chat model hosted in Azure AI Foundry.
     Use mini=True for cheap, high-throughput tasks (translation, summaries).
     Use mini=False (default) for code generation and complex reasoning.
     """
-    deployment = (
-        settings.azure_openai_mini_deployment if mini
-        else settings.azure_openai_deployment
+    model = (
+        settings.model_mini_deployment if mini
+        else settings.model_deployment
     )
-    return AzureChatOpenAI(
-        azure_endpoint=settings.azure_openai_endpoint,
-        api_key=settings.azure_openai_api_key,
-        azure_deployment=deployment,
-        api_version="2024-08-01-preview",
+    return ChatAnthropic(
+        model=model,
+        api_key=settings.azure_ai_api_key,
+        base_url=settings.azure_ai_project_endpoint,
         temperature=0,          # deterministic output for code generation
         max_retries=3,
     )
@@ -2599,9 +2604,10 @@ service:
   port: 8080
 
 env:
-  AZURE_OPENAI_ENDPOINT: ""        # injected from Azure Key Vault via CSI driver
-  AZURE_OPENAI_API_KEY: ""
-  AZURE_OPENAI_DEPLOYMENT: "gpt-4o"
+  AZURE_AI_PROJECT_ENDPOINT: ""        # injected from Azure Key Vault via CSI driver
+  AZURE_AI_API_KEY: ""
+  MODEL_DEPLOYMENT_NAME: "claude-sonnet-4-6"
+  MODEL_MINI_DEPLOYMENT_NAME: "claude-haiku-4-5"
   GITHUB_TOKEN: ""
   GITHUB_REPO: "Gedat-GmbH/tj-sales"
   JIRA_BASE_URL: ""
@@ -2661,10 +2667,9 @@ jobs:
       - run: pip install -r agents/requirements.txt
       - run: python -m agents.main --task "${{ github.event.inputs.task }}"
         env:
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_AI_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_PROJECT_ENDPOINT }}
+          AZURE_AI_API_KEY: ${{ secrets.AZURE_AI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: TJS
@@ -2696,8 +2701,8 @@ jobs:
       - name: Run LangSmith benchmark
         run: python -m agents.evals.run_eval
         env:
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_AI_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_PROJECT_ENDPOINT }}
+          AZURE_AI_API_KEY: ${{ secrets.AZURE_AI_API_KEY }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

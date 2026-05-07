@@ -191,7 +191,7 @@ evaluate(
 
 #### Comparison Runs
 
-Run two versions of an agent (e.g., different system prompt, `gpt-4o` vs `gpt-4o-mini`, old vs new convention file) against the same dataset and compare scores side-by-side to validate improvements before deploying.
+Run two versions of an agent (e.g., different system prompt, `claude-sonnet-4-6` vs `claude-haiku-4-5`, old vs new convention file) against the same dataset and compare scores side-by-side to validate improvements before deploying.
 
 ### Benchmarking Agent Performance
 
@@ -484,7 +484,7 @@ The orchestrator can live inside the existing `ai/` service directory or as a se
 |---|---|---|---|---|
 | R1 | Agent commits broken code | Medium | High | Always require human PR review before merge; never auto-merge to `main` |
 | R2 | Prompt injection from external PR contributors | Low | High | Sanitise all external input; run agents in read-only mode for external PRs |
-| R3 | Azure OpenAI cost overrun | Medium | Medium | Set per-run token budgets; use `gpt-4o-mini` for low-stakes tasks |
+| R3 | Azure AI cost overrun | Medium | Medium | Set per-run token budgets; use `claude-haiku-4-5` for low-stakes tasks |
 | R4 | LangChain breaking changes | High | Low | Pin exact versions; run CI against upgrades in isolation |
 | R5 | Agent leaks secrets in LLM context | Low | Critical | Never pass credentials as strings; use environment variable references only |
 | R6 | Generated tests that always pass but assert nothing useful | High | Medium | Include test review in Code Review Agent checklist; require coverage gate |

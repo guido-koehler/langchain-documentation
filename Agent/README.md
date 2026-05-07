@@ -39,7 +39,7 @@ validate_node ── should_retry() ───────┘
 ### 1. Prerequisites
 
 - Python 3.11+
-- An **Azure AI Foundry** project with a deployed chat model (e.g. `gpt-4.1`) — [create one here](https://learn.microsoft.com/azure/foundry/how-to/create-projects)
+- An **Azure AI Foundry** project with deployed Claude models (`claude-sonnet-4-6` and `claude-haiku-4-5`) — [create one here](https://learn.microsoft.com/azure/foundry/how-to/create-projects)
 - Either `az login` (recommended) **or** a Foundry API key for local authentication
 - A **LangSmith** account (free tier is sufficient): [smith.langchain.com](https://smith.langchain.com)
 
@@ -71,7 +71,8 @@ cp .env.example .env
 # Then edit .env and fill in your values:
 #   AZURE_AI_PROJECT_ENDPOINT   ← Foundry project endpoint URL
 #   AZURE_AI_API_KEY            ← leave blank if using `az login`
-#   MODEL_DEPLOYMENT_NAME       ← e.g. "gpt-4.1"
+#   MODEL_DEPLOYMENT_NAME       ← e.g. "claude-sonnet-4-6"  (primary)
+#   MODEL_MINI_DEPLOYMENT_NAME  ← e.g. "claude-haiku-4-5"   (mini)
 #   LANGSMITH_API_KEY           ← get from smith.langchain.com → Settings → API Keys
 #   LANGSMITH_TRACING=true
 #   LANGCHAIN_PROJECT=tj-sales-hello-world
@@ -155,7 +156,7 @@ Agent/
 └── hello_world/
     ├── __init__.py
     ├── state.py                  ← HelloWorldState TypedDict
-    ├── llm.py                    ← AzureAIChatCompletionsModel client factory (Azure AI Foundry)
+    ├── llm.py                    ← ChatAnthropic client factory (claude-sonnet-4-6 / claude-haiku-4-5)
     ├── nodes.py                  ← generate_node, validate_node, should_retry
     ├── graph.py                  ← StateGraph wiring
     └── main.py                   ← entry point + LangSmith trace URL printer

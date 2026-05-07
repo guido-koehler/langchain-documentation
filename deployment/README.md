@@ -59,9 +59,9 @@ models into the project:
 1. Go to the [Azure Portal link](https://portal.azure.com) printed in the outputs.
 2. Navigate to the Foundry Hub → **Launch in AI Foundry portal**.
 3. Open the `agentic-development-project` project.
-4. Go to **Models + endpoints** → **Deploy model** → choose `gpt-4.1` (primary)
-   and `gpt-4.1-mini` (mini).
-5. Set `MODEL_DEPLOYMENT_NAME=gpt-4.1` in `Agent/.env`.
+4. Go to **Models + endpoints** → **Deploy model** → choose `claude-sonnet-4-6` (primary)
+   and `claude-haiku-4-5` (mini) from the Anthropic collection.
+5. Set `MODEL_DEPLOYMENT_NAME=claude-sonnet-4-6` and `MODEL_MINI_DEPLOYMENT_NAME=claude-haiku-4-5` in `Agent/.env`.
 
 ## Tear down
 
