@@ -1,0 +1,8 @@
+# Python cache
+Agent/hello_world/__pycache__/
+
+# Environment variables — never commit real secrets
+Agent/.env
+
+# Virtual environment
+Agent/.venv/
