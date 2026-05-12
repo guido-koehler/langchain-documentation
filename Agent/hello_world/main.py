@@ -30,7 +30,11 @@ if _tracing_enabled:
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_API_KEY", os.getenv("LANGSMITH_API_KEY", ""))
     os.environ.setdefault(
-        "LANGCHAIN_PROJECT", os.getenv("LANGCHAIN_PROJECT", "tj-sales-hello-world")
+        "LANGCHAIN_ENDPOINT",
+        os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
+    )
+    os.environ.setdefault(
+        "LANGCHAIN_PROJECT", os.getenv("LANGSMITH_PROJECT", "tj-sales-hello-world")
     )
 
 from langsmith import Client  # noqa: E402  (import after env setup)
@@ -46,8 +50,11 @@ def main() -> None:
 
     if _tracing_enabled:
         project = os.environ.get("LANGCHAIN_PROJECT", "tj-sales-hello-world")
+        _ui_base = os.environ.get(
+            "LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com"
+        ).replace("api.smith.langchain.com", "smith.langchain.com")
         print(f"\n  🔭 LangSmith tracing ENABLED  →  project: '{project}'")
-        print(f"     Dashboard: https://smith.langchain.com/projects/{project}\n")
+        print(f"     Dashboard: {_ui_base}/projects/{project}\n")
     else:
         print("\n  ⚠️  LangSmith tracing DISABLED  (set LANGSMITH_TRACING=true to enable)\n")
 
@@ -89,6 +96,9 @@ def _print_trace_url(project: str) -> None:
     """
     try:
         client = Client()
+        _ui_base = os.environ.get(
+            "LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com"
+        ).replace("api.smith.langchain.com", "smith.langchain.com")
         runs = list(
             client.list_runs(
                 project_name=project,
@@ -98,7 +108,7 @@ def _print_trace_url(project: str) -> None:
         )
         if runs:
             run = runs[0]
-            url = f"https://smith.langchain.com/public/{run.id}/r"
+            url = f"{_ui_base}/public/{run.id}/r"
             print(f"\n  🔗 LangSmith trace: {url}")
     except Exception as exc:  # noqa: BLE001
         print(f"\n  (Could not fetch LangSmith trace URL: {exc})")
