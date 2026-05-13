@@ -107,10 +107,12 @@ tj-sales/
 │   │   ├── test_writer.py
 │   │   └── release_notes.py
 │   ├── graphs/
-│       ├── __init__.py
-│       ├── feature_workflow.py
-│       ├── review_workflow.py
-│       └── ci_recovery_workflow.py
+│   │   ├── __init__.py
+│   │   ├── build_fix_loop_graph.py   # cyclic build→fix→build loop (shared)
+│   │   ├── ci_recovery_workflow.py
+│   │   ├── feature_workflow.py
+│   │   ├── review_workflow.py
+│   │   └── translation_workflow.py   # CLI/schedule-triggered translation runner
 │   └── evals/
 │       ├── __init__.py
 │       ├── create_dataset.py
@@ -137,11 +139,14 @@ touch agents/tools/__init__.py agents/agents/__init__.py agents/graphs/__init__.
 
 ```text
 # LangChain + LangGraph
-langchain>=1.0.0
-langchain-core>=1.0.0
-langgraph>=1.0.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0    # required for AsyncSqliteSaver
-langchain-openai>=0.3.0               # Azure OpenAI integration
+langchain-azure-ai[opentelemetry]>=0.1.0  # Azure AI Foundry integration
+
+# Azure auth
+azure-identity>=1.17.0               # DefaultAzureCredential (managed identity / az login)
 
 # HTTP & API clients
 httpx>=0.27.0                   # async HTTP (Jira, GitHub REST)
@@ -157,10 +162,12 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 
 # Observability
-langsmith>=0.3.0
+langsmith>=0.1.0
 
 # Utilities
 tenacity>=9.0.0
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
 ```
 
 Install:
@@ -175,31 +182,40 @@ pip install -r requirements.txt
 ### `agents/.env.example`
 
 ```dotenv
-# Azure OpenAI
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_API_KEY=your-key
-AZURE_OPENAI_DEPLOYMENT=gpt-5.4          # deployment name for scaffolding / review
-AZURE_OPENAI_MINI_DEPLOYMENT=gpt-5.4-mini  # cheaper model for translation / summaries
+# ── Azure AI Foundry ──────────────────────────────────────────────────────────
+# Found in Azure AI Foundry portal → your project → Overview → Project endpoint
+# Authentication uses DefaultAzureCredential — no API key required.
+# Local dev: run `az login` once. Production/AKS: pod Managed Identity is used automatically.
+AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
 
-# GitHub
+# Deployment names inside your Foundry project
+MODEL_DEPLOYMENT_NAME=gpt-5.4          # used for code generation and complex reasoning
+MODEL_MINI_DEPLOYMENT_NAME=gpt-5.4-mini  # cheaper model for translation / summaries
+
+# ── GitHub ─────────────────────────────────────────────────────────────────────
 GITHUB_TOKEN=ghp_...
 GITHUB_REPO=Gedat-GmbH/tj-sales
 
-# Jira
+# ── Jira ───────────────────────────────────────────────────────────────────────
 JIRA_BASE_URL=https://your-org.atlassian.net
 JIRA_USER_EMAIL=your@email.com
 JIRA_API_TOKEN=your-jira-token
 JIRA_PROJECT_KEY=TJS
 
-# Repository root (absolute path on the machine running agents)
-REPO_ROOT=/path/to/tj-sales
+# ── Repository root (absolute path on the machine running agents) ──────────────
+REPO_ROOT=C:\path\to\tj-sales
 
-# LangSmith (optional)
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=ls__...
+# ── Application Insights (optional) ───────────────────────────────────────────
+APPLICATION_INSIGHTS_CONNECTION_STRING=
+
+# ── LangSmith Tracing ─────────────────────────────────────────────────────────
+# Get your key at https://smith.langchain.com → Settings → API Keys
+# Set LANGSMITH_TRACING=false to disable tracing entirely.
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY=
 LANGCHAIN_PROJECT=tj-sales-agents
 
-# Webhook server
+# ── Webhook server ─────────────────────────────────────────────────────────────
 WEBHOOK_SECRET=a-random-string-to-validate-github-webhooks
 WEBHOOK_PORT=8080
 ```
@@ -220,28 +236,30 @@ from pathlib import Path
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Azure OpenAI
-    azure_openai_endpoint: str
-    azure_openai_api_key: str
+    # Azure AI Foundry — authentication via DefaultAzureCredential (no API key)
+    azure_ai_project_endpoint: str = ""
     azure_openai_deployment: str = "gpt-5.4"
     azure_openai_mini_deployment: str = "gpt-5.4-mini"
 
     # GitHub
-    github_token: str
+    github_token: str = ""
     github_repo: str = "Gedat-GmbH/tj-sales"
 
     # Jira
-    jira_base_url: str
-    jira_user_email: str
-    jira_api_token: str
+    jira_base_url: str = ""
+    jira_user_email: str = ""
+    jira_api_token: str = ""
     jira_project_key: str = "TJS"
 
     # Local paths
-    repo_root: Path
+    repo_root: Path = Path(".")
 
     # Webhook
     webhook_secret: str = ""
     webhook_port: int = 8080
+
+    # Observability
+    azure_application_insights_connection_string: str = ""
 
 
 settings = Settings()
@@ -251,14 +269,17 @@ settings = Settings()
 
 **`agents/config/llm.py`**
 
+Authentication uses **`DefaultAzureCredential`** from `azure-identity`. In local development run `az login` once; on AKS the pod's Managed Identity is used automatically — no API key is required or stored.
+
 ```python
-from langchain_openai import AzureChatOpenAI
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from azure.identity import DefaultAzureCredential
 from agents.config.settings import settings
 
 
-def get_llm(mini: bool = False) -> AzureChatOpenAI:
+def get_llm(mini: bool = False) -> AzureAIChatCompletionsModel:
     """
-    Returns an Azure OpenAI chat model.
+    Returns an Azure AI Foundry chat model.
     Use mini=True for cheap, high-throughput tasks (translation, summaries).
     Use mini=False (default) for code generation and complex reasoning.
     """
@@ -266,13 +287,11 @@ def get_llm(mini: bool = False) -> AzureChatOpenAI:
         settings.azure_openai_mini_deployment if mini
         else settings.azure_openai_deployment
     )
-    return AzureChatOpenAI(
-        azure_endpoint=settings.azure_openai_endpoint,
-        api_key=settings.azure_openai_api_key,
-        azure_deployment=deployment,
-        api_version="2024-08-01-preview",
-        temperature=0,          # deterministic output for code generation
-        max_retries=3,
+    return AzureAIChatCompletionsModel(
+        endpoint=settings.azure_ai_project_endpoint,
+        credential=DefaultAzureCredential(),
+        model_name=deployment,
+        temperature=0,
     )
 ```
 

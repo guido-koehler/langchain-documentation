@@ -108,6 +108,8 @@ The system MUST provide the following specialised agents:
 
 **REQ-WF-03** — The Full Feature Workflow (AGT-01 through AGT-05 combined) MUST support **parallel execution** of backend and frontend scaffolding using `langgraph.constants.Send` to fan out from the Planner node.
 
+> ⚠️ **Implementation status:** The current `feature_workflow.py` executes backend → frontend → tests **sequentially**. The `Send`-based parallel fan-out is not yet implemented. This is a known gap against this requirement.
+
 **REQ-WF-04** — Every stateful workflow MUST use a **LangGraph Checkpointer** (`AsyncSqliteSaver` for single-node, `AsyncRedisSaver` for multi-node/AKS) so that workflows can be paused and resumed without data loss.
 
 **REQ-WF-05** — The Full Feature Workflow MUST implement a **human-in-the-loop checkpoint** using `interrupt_before=["open_pr"]` before any PR is created. Developers MUST be able to inspect the agent's output and resume via a CLI command or Slack/GitHub comment.
@@ -146,9 +148,11 @@ The system MUST provide the following specialised agents:
 - Add labels to PRs (e.g., `ai-generated`, `needs-human`)
 
 **REQ-GH-02** — The webhook server MUST handle the following GitHub webhook events:
-- `pull_request` → `opened` / `synchronize` → triggers Code Review Agent
-- `workflow_run` → `completed` with `conclusion=failure` → triggers CI/CD Monitor
+- `pull_request` → `opened` / `synchronize` → triggers Code Review Agent ✅
+- `workflow_run` → `completed` with `conclusion=failure` → triggers CI/CD Monitor ✅
 - `create` with `ref_type=tag` → triggers Release Notes Agent
+
+> ⚠️ **Implementation status:** The `create` + `ref_type=tag` event is received and logged in `main.py` but does not yet invoke the Release Notes Agent. Wiring the `generate_release_notes` call is a pending task.
 
 **REQ-GH-03** — Webhook payloads from GitHub MUST be validated using HMAC-SHA256 signature verification against the `WEBHOOK_SECRET` environment variable before processing.
 
