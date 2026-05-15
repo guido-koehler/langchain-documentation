@@ -47,12 +47,12 @@ Before writing any code, ensure the following are in place:
 
 | Requirement | Where to get it | Environment variable |
 |---|---|---|
-| Azure OpenAI endpoint + key | Azure Portal → your OpenAI resource | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
-| Azure OpenAI deployment name | Azure AI Studio → Deployments | `AZURE_OPENAI_DEPLOYMENT` |
+| Azure AI Foundry project endpoint | Azure AI Foundry portal → your project → Overview → Project endpoint | `AZURE_AI_PROJECT_ENDPOINT` |
+| Azure AI model deployment names | Azure AI Foundry → Deployments | `MODEL_DEPLOYMENT_NAME`, `MODEL_MINI_DEPLOYMENT_NAME` |
 | GitHub Personal Access Token (PAT) with `repo`, `pull_requests`, `actions` scopes | GitHub → Settings → Developer settings → PAT | `GITHUB_TOKEN` |
 | Jira API token | `id.atlassian.com` → Security → API tokens | `JIRA_API_TOKEN` |
 | Jira base URL + user email | Your Atlassian instance URL | `JIRA_BASE_URL`, `JIRA_USER_EMAIL` |
-| LangSmith API key (optional but recommended) | `smith.langchain.com` | `LANGCHAIN_API_KEY` |
+| LangSmith API key (optional but recommended) | `smith.langchain.com` | `LANGSMITH_API_KEY` |
 
 ### Local Toolchain
 

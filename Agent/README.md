@@ -28,7 +28,7 @@ validate_node ── should_retry() ───────┘
 
 | Node | Responsibility |
 |---|---|
-| `generate_node` | Calls Azure AI Foundry to produce (or fix) the result. On retries, includes the validator's feedback in the prompt. |
+| `generate_node` | Calls the Azure OpenAI service to produce (or fix) the result. On retries, includes the validator's feedback in the prompt. |
 | `validate_node` | Checks the result against simple rules (code fence present, contains "Hello World"). Returns human-readable feedback on failure. |
 | `should_retry` | Conditional edge router — loops back to `generate_node` if there is feedback and `max_attempts` has not been reached. |
 
@@ -39,9 +39,14 @@ validate_node ── should_retry() ───────┘
 ### 1. Prerequisites
 
 - Python 3.11+
-- An **Azure AI Foundry** project with a deployed chat model (e.g. `gpt-5.4`) — [create one here](https://learn.microsoft.com/azure/foundry/how-to/create-projects)
-- Either `az login` (recommended) **or** a Foundry API key for local authentication
+- An **Azure OpenAI** resource with a deployed chat model (e.g. `gpt-5.4`) — [create one here](https://learn.microsoft.com/azure/ai-services/openai/how-to/create-resource)
+- Either `az login` (recommended for keyless auth) **or** an Azure OpenAI API key for local development
 - A **LangSmith** account (free tier is sufficient): [smith.langchain.com](https://smith.langchain.com)
+
+> **Demo vs. production LLM client**  
+> This hello-world demo connects to **Azure OpenAI** directly (`*.openai.azure.com`) using `AzureChatOpenAI` from `langchain-openai`. It requires `AZURE_OPENAI_ENDPOINT` and optionally `AZURE_OPENAI_API_KEY`.  
+> The production `agents/` package in tj-sales uses **Azure AI Foundry** (`AzureAIChatCompletionsModel` from `langchain-azure-ai`), which connects through a Foundry project endpoint and always uses `DefaultAzureCredential` — no API key needed.  
+> The LangGraph patterns (state, nodes, graph, LangSmith tracing) are identical in both.
 
 ### 2. Create a virtual environment
 
@@ -69,12 +74,13 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # Then edit .env and fill in your values:
-#   AZURE_AI_PROJECT_ENDPOINT   ← Foundry project endpoint URL
-#   AZURE_AI_API_KEY            ← leave blank if using `az login`
-#   MODEL_DEPLOYMENT_NAME       ← e.g. "gpt-5.4"
-#   LANGSMITH_API_KEY           ← get from smith.langchain.com → Settings → API Keys
+#   AZURE_OPENAI_ENDPOINT      ← Azure OpenAI resource endpoint (*.openai.azure.com)
+#   AZURE_OPENAI_API_KEY       ← leave blank if using `az login` (DefaultAzureCredential)
+#   AZURE_OPENAI_API_VERSION   ← e.g. "2024-10-21" (default used if omitted)
+#   MODEL_DEPLOYMENT_NAME      ← e.g. "gpt-5.4"
+#   LANGSMITH_API_KEY          ← get from smith.langchain.com → Settings → API Keys
 #   LANGSMITH_TRACING=true
-#   LANGCHAIN_PROJECT=tj-sales-hello-world
+#   LANGSMITH_PROJECT=tj-sales-hello-world
 ```
 
 ### 5. Run the agent
@@ -155,7 +161,7 @@ Agent/
 └── hello_world/
     ├── __init__.py
     ├── state.py                  ← HelloWorldState TypedDict
-    ├── llm.py                    ← AzureAIChatCompletionsModel client factory (Azure AI Foundry)
+    ├── llm.py                    ← AzureChatOpenAI client factory (Azure OpenAI — demo only; production agents use AzureAIChatCompletionsModel via langchain-azure-ai)
     ├── nodes.py                  ← generate_node, validate_node, should_retry
     ├── graph.py                  ← StateGraph wiring
     └── main.py                   ← entry point + LangSmith trace URL printer

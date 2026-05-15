@@ -1,7 +1,7 @@
 # Core LangChain / LangGraph stack
 langgraph==0.2.56
 langchain==0.3.14
-langchain-azure-ai[opentelemetry]>=0.1.0
+langchain-openai>=0.3.0         # AzureChatOpenAI — used by this hello-world demo
 
 # LangSmith tracing (optional but strongly recommended)
 langsmith==0.1.147
